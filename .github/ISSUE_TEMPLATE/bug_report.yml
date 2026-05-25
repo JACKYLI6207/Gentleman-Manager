@@ -1,0 +1,76 @@
+name: 🐞 反饋 Bug
+description: 反饋遇到的問題
+labels: [ bug ]
+title: "[Bug] 修改我！未修改標題的issue將被自動關閉"
+body:
+  - type: checkboxes
+    attributes:
+      label: 在提交BUG之前
+      options:
+        - label: 我嘗試使用了最新版，我確定這個問題在最新版中依然存在
+          required: true
+  - type: textarea
+    id: desc
+    attributes:
+      label: 問題描述
+      description: 發生了什麼情況？有什麼現狀？漫畫ID是多少？漫畫鏈接是什麼？問題能穩定觸發嗎？
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 復現步驟
+      description: 這是整個 issue 中最重要的部分。請盡量提供完整、可重複的操作步驟，方便定位問題。
+      placeholder: |
+        復現步驟是影響issue處理效率的最大因素
+        沒有詳細的復現步驟將導致問題難以被定位，開發者需要花費大量時間來回溝通以定位問題
+        僅提供報錯資訊或截圖而沒有復現步驟，問題難以被定位，也就難以被解決
+        詳細的復現步驟也是對項目維護工作的尊重
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 預期行為
+      description: 正常情況下應該發生什麼
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 實際行為
+      description: 實際上發生了什麼
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日誌
+      description: 請提供相關的日誌資訊
+      placeholder: |
+        如果相關日誌比較短可以直接粘貼
+        
+        如果相關日誌很長，建議將相關日誌儲存為txt，然後點擊文本框下面小長條上傳文件
+    validations:
+      required: false
+  - type: textarea
+    id: media
+    attributes:
+      label: 截圖或錄屏
+      description: 問題復現時候的截圖或錄屏
+      placeholder: 點擊文本框下面小長條可以上傳文件
+  - type: input
+    id: version
+    attributes:
+      label: 工具版本號(點右上角`關於`按鈕查看)
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: other
+    attributes:
+      label: 其他
+      description: 其他要補充的內容
+      placeholder: 其他要補充的內容
+    validations:
+      required: false

@@ -1,0 +1,31 @@
+html,
+body,
+#app {
+    @apply m-0 h-full;
+}
+
+body {
+    @apply bg-[#101014] text-[#ffffffd1];
+    color-scheme: dark;
+}
+
+.selection-area {
+    @apply bg-[rgba(46,115,252,0.5)];
+}
+
+.n-notification-main__header {
+    @apply break-words;
+}
+
+.n-tabs-pane-wrapper {
+    @apply h-full;
+}
+
+.n-tabs-nav {
+  @apply px-2;
+}
+
+/* 確保三個分頁標籤在左側半屏內可見（過窄時可橫向捲動） */
+.n-tabs .n-tabs-nav-scroll-wrapper {
+  overflow-x: auto;
+}

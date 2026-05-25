@@ -1,0 +1,25 @@
+.progressesTabs {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+
+    :global(.n-tabs-tab) {
+      @apply important-py-0.75;
+    }
+
+    :global(.n-tabs-pane-wrapper) {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    :global(.n-tab-pane) {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+}

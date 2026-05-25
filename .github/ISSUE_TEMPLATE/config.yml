@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ❓ 提問與討論
+    url: https://github.com/JACKYLI6207/Gentleman-Manager/discussions
+    about: 如果有一般性問題或想發起討論，請使用 GitHub Discussions

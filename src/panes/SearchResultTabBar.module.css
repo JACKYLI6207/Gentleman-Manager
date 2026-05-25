@@ -1,0 +1,103 @@
+.tabBar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 0.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 1;
+  min-height: 2rem;
+}
+
+.tabBar::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1 1 0;
+  min-width: 4.5rem;
+  max-width: 12rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.65rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 0.35rem 0.35rem 0 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  font-size: 0.8125rem;
+  line-height: 1.2;
+  opacity: 0.75;
+}
+
+.tab:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tabActive {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--n-divider-color);
+  font-weight: 600;
+}
+
+.tabStar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.2rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+
+.tabStar:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.tabStarActive {
+  opacity: 1;
+  color: #f0c040;
+}
+
+.tabTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.2rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.65;
+  flex-shrink: 0;
+}
+
+.tabClose:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.12);
+}

@@ -1,0 +1,260 @@
+.comicCard em {
+    @apply text-lightBlue;
+}
+
+.detailButton {
+    color: #000 !important;
+}
+
+.comicCardGrid {
+    height: 100%;
+}
+
+.coverWrap {
+    position: relative;
+    width: 100%;
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.coverWrapList {
+    position: relative;
+    width: 6rem;
+    margin-right: 1rem;
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.coverPlaceholder {
+    width: 100%;
+    aspect-ratio: 3 / 4;
+    display: block;
+}
+
+.coverPlaceholderList {
+    width: 100%;
+    aspect-ratio: 3 / 4;
+    display: block;
+}
+
+.favoriteButton {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    background: rgba(0, 0, 0, 0.45);
+    color: rgba(255, 255, 255, 0.35);
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.favoriteButton:hover {
+    background: rgba(0, 0, 0, 0.6);
+}
+
+.favoriteButtonActive {
+    color: #f5c518;
+}
+
+.gridCover {
+    width: 100%;
+    aspect-ratio: 3 / 4;
+    object-fit: cover;
+    display: block;
+}
+
+.gridBody {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    padding: 0.5rem;
+    gap: 0.25rem;
+}
+
+.gridTitle {
+    font-weight: 700;
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+}
+
+.gridTitleSlot {
+    flex-shrink: 0;
+    min-height: calc(2 * 1.25rem);
+}
+
+.listTitle {
+    font-weight: 700;
+    font-size: 1.125rem;
+    line-height: 1.5rem;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+}
+
+.titlePopover {
+    max-width: 20rem;
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.gridInfo {
+    font-size: 0.75rem;
+    line-height: 1rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gridTagsArea {
+    flex-shrink: 0;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.gridActions {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 0.25rem;
+    margin-top: auto;
+    flex-shrink: 0;
+    padding-top: 0.375rem;
+    justify-content: stretch;
+    width: 100%;
+}
+
+.gridActions :global(.n-button) {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.gridCompactButton:global(.n-button) {
+    padding-left: 4px !important;
+    padding-right: 4px !important;
+    font-size: 0.6875rem;
+    max-width: none;
+}
+
+.cardActionButton {
+    flex: 0 0 auto;
+    max-width: 5.5rem;
+}
+
+.cardActionButton:global(.n-button) {
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+.comicCardGrid .cardActionButton:global(.n-button) {
+    padding-left: 4px;
+    padding-right: 4px;
+}
+
+.cardFooter {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    margin-top: auto;
+    padding-top: 0.5rem;
+}
+
+.cardActions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.tagsBlock {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    width: 100%;
+    min-width: 0;
+}
+
+.tagsRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+}
+
+.tagButton:global(.n-button) {
+    max-width: 4.5rem;
+    min-width: 0;
+}
+
+.comicCardGrid .tagButton:global(.n-button) {
+    max-width: calc(50% - 2px);
+    flex: 0 1 auto;
+}
+
+.tagButton:global(.n-button__content) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+    max-width: 100%;
+}
+
+.moreTagsButton {
+    flex-shrink: 0;
+}
+
+.moreTagsMenu {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-width: 16rem;
+}
+
+.moreTagsMenu .tagButton:global(.n-button) {
+    max-width: 7.5rem;
+    flex: 0 1 auto;
+}
+
+.catalogAnalysisNote {
+    font-size: 0.75rem;
+    line-height: 1.25rem;
+    padding: 0.25rem 0.375rem;
+    border-radius: 0.25rem;
+    word-break: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.catalogAnalysisDuplicate {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
+    border: 1px solid rgba(251, 191, 36, 0.35);
+}
+
+.catalogAnalysisClear {
+    color: #86efac;
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.25);
+}

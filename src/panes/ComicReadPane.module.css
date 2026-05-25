@@ -1,0 +1,46 @@
+.readerPage {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 900px;
+}
+
+.pagePlaceholder {
+    min-height: 480px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.readerFullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    flex-direction: column;
+    width: 100vw;
+    height: 100vh;
+    background: var(--n-body-color);
+}
+
+.readerHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 8px;
+    border-bottom: 1px solid var(--n-divider-color);
+}
+
+.readerHeaderTitle {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-weight: 700;
+    font-size: 1rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.readerHeaderActions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
