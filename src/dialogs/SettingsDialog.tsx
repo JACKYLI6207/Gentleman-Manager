@@ -14,9 +14,6 @@ import {
   NInput,
   NCheckbox,
 } from 'naive-ui'
-import { commands } from '../bindings.ts'
-import { path } from '@tauri-apps/api'
-import { appDataDir } from '@tauri-apps/api/path'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { open } from '@tauri-apps/plugin-dialog'
 
@@ -42,14 +39,6 @@ export default defineComponent({
         customApiDomain.value = store.config.customApiDomain
       }
     })
-
-    async function showConfigPathInFileManager() {
-      const configPath = await path.join(await appDataDir(), 'config.json')
-      const result = await commands.showPathInFileManager(configPath)
-      if (result.status === 'error') {
-        console.error(result.error)
-      }
-    }
 
     async function pickKoreanTxtCatalogFiles() {
       if (store.config === undefined) {
@@ -274,11 +263,6 @@ export default defineComponent({
             )}
           </div>
 
-          <div class="flex justify-end mt-4">
-            <NButton size="small" onClick={showConfigPathInFileManager}>
-              開啟設定目錄
-            </NButton>
-          </div>
         </NDialog>
       </NModal>
     )
