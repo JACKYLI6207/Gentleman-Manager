@@ -40,6 +40,8 @@ export interface SearchResultTabState {
   listScrollTop: number
   /** 慢速掃描分類完成後的完整列表；收藏分頁還原時離線分頁，不再觸發全站掃描 */
   scopedOfflineMatches?: ComicInSearch[]
+  /** 全站/分類快照分頁對應的 IndexedDB 快照 ID；切回分頁時可重新載入完整離線列表 */
+  globalSnapshotMetaId?: string
 }
 
 const TAB_TITLE_MAX = 28

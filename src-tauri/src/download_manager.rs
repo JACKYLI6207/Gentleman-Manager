@@ -185,8 +185,8 @@ impl DownloadManager {
         for record in records {
             use DownloadTaskState::{Cancelled, Completed, Downloading, Failed, Paused, Pending};
             match record.state {
-                Completed | Cancelled => {}
-                Pending | Downloading | Paused | Failed => {
+                Completed | Cancelled | Paused | Failed => {}
+                Pending | Downloading => {
                     if self.download_tasks.read().contains_key(&record.comic_id) {
                         continue;
                     }
@@ -237,8 +237,8 @@ impl DownloadManager {
             let persisted = DownloadTaskStore::load(&self.app);
             let record = persisted.iter().find(|r| r.comic_id == comic.id);
             if let Some(record) = record {
-                use DownloadTaskState::{Cancelled, Completed};
-                if matches!(record.state, Completed | Cancelled) {
+                use DownloadTaskState::{Cancelled, Completed, Failed, Paused};
+                if matches!(record.state, Completed | Cancelled | Paused | Failed) {
                     continue;
                 }
             }
@@ -334,17 +334,26 @@ impl DownloadManager {
         }
         drop(tasks);
         let task = DownloadTask::new(self.app.clone(), comic, series_parent_dir);
-        task.emit_download_task_event();
-        tauri::async_runtime::spawn(task.clone().process());
         self.download_tasks.write().insert(comic_id, task);
+        if let Some(task) = self.download_tasks.read().get(&comic_id).cloned() {
+            task.emit_download_task_event();
+            tauri::async_runtime::spawn(task.process());
+        }
     }
 
     pub fn pause_download_task(&self, comic_id: i64) -> anyhow::Result<()> {
         let tasks = self.download_tasks.read();
         let Some(task) = tasks.get(&comic_id) else {
-            return Err(anyhow!("未找到漫畫ID為`{comic_id}`的下載任務"));
+            let mut record = DownloadTaskStore::load(&self.app)
+                .into_iter()
+                .find(|record| record.comic_id == comic_id)
+                .ok_or_else(|| anyhow!("未找到漫畫ID為`{comic_id}`的下載任務"))?;
+            record.state = DownloadTaskState::Paused;
+            DownloadTaskStore::upsert(&self.app, record);
+            return Ok(());
         };
         task.set_state(DownloadTaskState::Paused);
+        task.emit_download_task_event();
         Ok(())
     }
 
@@ -353,7 +362,13 @@ impl DownloadManager {
         let recreate = {
             let tasks = self.download_tasks.read();
             let Some(task) = tasks.get(&comic_id) else {
-                return Err(anyhow!("未找到漫畫ID為`{comic_id}`的下載任務"));
+                let record = DownloadTaskStore::load(&self.app)
+                    .into_iter()
+                    .find(|record| record.comic_id == comic_id)
+                    .ok_or_else(|| anyhow!("未找到漫畫ID為`{comic_id}`的下載任務"))?;
+                drop(tasks);
+                self.create_download_task(record.comic, record.series_parent_dir);
+                return Ok(());
             };
             let task_state = *task.state_sender.borrow();
 
@@ -361,6 +376,7 @@ impl DownloadManager {
                 Some((task.comic.as_ref().clone(), task.series_parent_dir.clone()))
             } else {
                 task.set_state(Pending);
+                task.emit_download_task_event();
                 None
             }
         };

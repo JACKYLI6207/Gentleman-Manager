@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::Mutex,
+};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -45,13 +48,21 @@ impl From<&DownloadTaskEvent> for PersistedDownloadTask {
 
 pub struct DownloadTaskStore;
 
+static DOWNLOAD_TASK_STORE_LOCK: Mutex<()> = Mutex::new(());
+
 impl DownloadTaskStore {
     pub fn store_path(app: &AppHandle) -> anyhow::Result<PathBuf> {
         let _ = app;
         Ok(crate::utils::app_data_dir()?.join("download_tasks.json"))
     }
 
-    pub fn load(app: &AppHandle) -> Vec<PersistedDownloadTask> {
+    fn lock_store() -> std::sync::MutexGuard<'static, ()> {
+        DOWNLOAD_TASK_STORE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn load_unlocked(app: &AppHandle) -> Vec<PersistedDownloadTask> {
         let Ok(path) = Self::store_path(app) else {
             return Vec::new();
         };
@@ -64,7 +75,12 @@ impl DownloadTaskStore {
         serde_json::from_str(&content).unwrap_or_default()
     }
 
-    fn save(app: &AppHandle, records: &[PersistedDownloadTask]) -> anyhow::Result<()> {
+    pub fn load(app: &AppHandle) -> Vec<PersistedDownloadTask> {
+        let _guard = Self::lock_store();
+        Self::load_unlocked(app)
+    }
+
+    fn save_unlocked(app: &AppHandle, records: &[PersistedDownloadTask]) -> anyhow::Result<()> {
         let path = Self::store_path(app)?;
         let json = serde_json::to_string_pretty(records)?;
         std::fs::write(path, json).context("寫入 download_tasks.json 失敗")?;
@@ -72,13 +88,14 @@ impl DownloadTaskStore {
     }
 
     pub fn upsert(app: &AppHandle, record: PersistedDownloadTask) {
-        let mut records = Self::load(app);
+        let _guard = Self::lock_store();
+        let mut records = Self::load_unlocked(app);
         if let Some(existing) = records.iter_mut().find(|r| r.comic_id == record.comic_id) {
             *existing = record;
         } else {
             records.push(record);
         }
-        if let Err(err) = Self::save(app, &records) {
+        if let Err(err) = Self::save_unlocked(app, &records) {
             tracing::warn!(message = %err, "儲存下載任務紀錄失敗");
         }
     }
@@ -88,13 +105,14 @@ impl DownloadTaskStore {
     }
 
     pub fn remove(app: &AppHandle, comic_id: i64) {
-        let mut records = Self::load(app);
+        let _guard = Self::lock_store();
+        let mut records = Self::load_unlocked(app);
         let before = records.len();
         records.retain(|r| r.comic_id != comic_id);
         if records.len() == before {
             return;
         }
-        if let Err(err) = Self::save(app, &records) {
+        if let Err(err) = Self::save_unlocked(app, &records) {
             tracing::warn!(message = %err, "刪除下載任務紀錄失敗");
         }
     }

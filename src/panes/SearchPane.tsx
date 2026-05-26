@@ -719,12 +719,37 @@ export default defineComponent({
       }
     }
 
+    function isGlobalSnapshotSearchState(source: SearchSource, label: string) {
+      return source.type === 'albums' && source.list === 'albums' && label.includes('快照')
+    }
+
+    function findGlobalSnapshotMetaForTab(tab: Pick<SearchResultTabState, 'activeCategoryLabel' | 'title' | 'globalSnapshotMetaId'>) {
+      if (tab.globalSnapshotMetaId !== undefined) {
+        const byId = globalSnapshotMetas.value.find((meta) => meta.id === tab.globalSnapshotMetaId)
+        if (byId !== undefined) {
+          return byId
+        }
+      }
+      return globalSnapshotMetas.value.find(
+        (meta) => tab.activeCategoryLabel === globalSnapshotLabel(meta) || tab.title === globalSnapshotLabel(meta),
+      )
+    }
+
+    function activeGlobalSnapshotMetaId() {
+      const tab = searchTabs.value.find((t) => t.id === activeTabId.value)
+      return (
+        tab?.globalSnapshotMetaId ??
+        findGlobalSnapshotMetaForTab({
+          activeCategoryLabel: activeCategoryLabel.value,
+          title: tab?.title ?? activeCategoryLabel.value,
+          globalSnapshotMetaId: undefined,
+        })?.id
+      )
+    }
+
     function captureTabState(): SearchResultTabState {
       const existing = searchTabs.value.find((t) => t.id === activeTabId.value)
-      const isGlobalSnapshotSearch =
-        searchSource.value.type === 'albums' &&
-        searchSource.value.list === 'albums' &&
-        activeCategoryLabel.value.includes('快照')
+      const isGlobalSnapshotSearch = isGlobalSnapshotSearchState(searchSource.value, activeCategoryLabel.value)
       return {
         id: activeTabId.value ?? crypto.randomUUID(),
         title: existing?.title ?? formatSearchResultTabTitle(tabTitleContext()),
@@ -753,6 +778,7 @@ export default defineComponent({
         listScrollTop: comicListScrollArea.value?.scrollTop ?? 0,
         scopedOfflineMatches:
           !isGlobalSnapshotSearch && scopedOfflineMatches.value.length > 0 ? [...scopedOfflineMatches.value] : undefined,
+        globalSnapshotMetaId: isGlobalSnapshotSearch ? activeGlobalSnapshotMetaId() : undefined,
       }
     }
 
@@ -828,6 +854,44 @@ export default defineComponent({
         totalCount: tab.totalCountHint,
         isSearchByTag: tab.searchSource.type === 'tag',
       }
+    }
+
+    async function ensureActiveGlobalSnapshotOfflineMatches() {
+      if (!isGlobalSnapshotSearchState(searchSource.value, activeCategoryLabel.value) || hasScopedOfflineMatches()) {
+        return true
+      }
+      const tab = activeTabId.value === null ? undefined : searchTabs.value.find((item) => item.id === activeTabId.value)
+      const meta = findGlobalSnapshotMetaForTab({
+        activeCategoryLabel: activeCategoryLabel.value,
+        title: tab?.title ?? activeCategoryLabel.value,
+        globalSnapshotMetaId: tab?.globalSnapshotMetaId,
+      })
+      if (meta === undefined) {
+        return false
+      }
+      const session = searchSession.value
+      const record = await getGlobalSnapshotRecord(meta.id)
+      if (!isActiveSearchSession(session)) {
+        return false
+      }
+      if (record === undefined) {
+        message.error('找不到全站快照內容，可能已被瀏覽器清除')
+        return false
+      }
+      scopedOfflineMatches.value = [...record.comics]
+      totalCountHint.value = record.comics.length
+      totalServerPagesHint.value = Math.max(1, Math.ceil(record.comics.length / SCOPED_COLLECTED_PAGE_SIZE))
+      totalCountRefined.value = true
+      if (activeTabId.value !== null) {
+        const idx = searchTabs.value.findIndex((item) => item.id === activeTabId.value)
+        if (idx >= 0) {
+          const next = [...searchTabs.value]
+          next[idx] = { ...next[idx]!, globalSnapshotMetaId: meta.id }
+          searchTabs.value = next
+          saveSearchResultTabs(searchTabs.value, activeTabId.value)
+        }
+      }
+      return true
     }
 
     function cancelInFlightSearchUi() {
@@ -1884,6 +1948,9 @@ export default defineComponent({
       if (page !== lastCommittedViewPage.value) {
         catalogAnalysisByComicId.value = new Map()
       }
+      if (!(await ensureActiveGlobalSnapshotOfflineMatches())) {
+        return false
+      }
       if (totalCountHint.value <= 0) {
         const cachedFirst = pageCache.get(1)
         if (cachedFirst !== undefined && cachedFirst.comics.length > 0) {
@@ -2420,6 +2487,15 @@ export default defineComponent({
       await completeNewSearchTab(globalSnapshotLabel(meta), buildCollectedSearchResult(comics), {
         offlineComics: comics,
       })
+      if (activeTabId.value !== null) {
+        const idx = searchTabs.value.findIndex((item) => item.id === activeTabId.value)
+        if (idx >= 0) {
+          const next = [...searchTabs.value]
+          next[idx] = { ...next[idx]!, globalSnapshotMetaId: meta.id }
+          searchTabs.value = next
+          saveSearchResultTabs(searchTabs.value, activeTabId.value)
+        }
+      }
       if (!isActiveSearchSession(session)) {
         return
       }
@@ -2644,7 +2720,14 @@ export default defineComponent({
           message.warning(`${target.label}沒有可更新的 100% 快照，請先載入或完成掃描`)
           continue
         }
-        const meta = await scanGlobalSnapshotTarget(target, mode === 'update' ? undefined : resumeMeta, updateBaseMeta)
+        let meta: GlobalSnapshotMeta | undefined
+        try {
+          meta = await scanGlobalSnapshotTarget(target, mode === 'update' ? undefined : resumeMeta, updateBaseMeta)
+        } catch (err) {
+          console.error(err)
+          clearGlobalSnapshotProgress()
+          message.error(`${target.label}快照掃描發生錯誤，將保留已保存內容並繼續後續分類`)
+        }
         if (meta !== undefined) {
           lastMeta = meta
         }
@@ -2665,15 +2748,64 @@ export default defineComponent({
       globalSnapshotStartedAt.value = Date.now()
       globalSnapshotElapsedTick.value = globalSnapshotStartedAt.value
       startGlobalSnapshotElapsedTimer()
+      globalSnapshotScanProgress.value = {
+        current: 0,
+        total: 1,
+        matchedCount: 0,
+        successPages: 0,
+        failedAttempts: 0,
+        queuedRetryPages: 0,
+        retrySuccessPages: 0,
+      }
+      const shouldStop = () => globalSnapshotCancelled
 
       async function fetchGlobalSnapshotPageForScan(page: number) {
         return (await fetchSnapshotScanTargetPage(target, page)).data
       }
 
-      const firstPage = await fetchGlobalSnapshotPageForScan(1)
+      async function fetchFirstGlobalSnapshotPageForScan() {
+        let failedAttempts = 0
+        while (!shouldStop()) {
+          const result = await fetchSnapshotScanTargetPage(target, 1)
+          if (result.data !== undefined) {
+            globalSnapshotPauseReason.value = null
+            return result.data
+          }
+          if (shouldStop()) {
+            return undefined
+          }
+          failedAttempts += 1
+          globalSnapshotScanProgress.value = {
+            current: 0,
+            total: 1,
+            matchedCount: 0,
+            successPages: 0,
+            failedAttempts,
+            queuedRetryPages: 1,
+            retrySuccessPages: 0,
+          }
+          const reason = result.reason ?? '未知錯誤'
+          const challenged = isCloudflareChallengeFailure(reason)
+          const cooldownSeconds = challenged || failedAttempts > 3 ? 20 : randomInt(3, 8)
+          for (let remaining = cooldownSeconds; remaining >= 1; remaining -= 1) {
+            if (shouldStop()) {
+              return undefined
+            }
+            globalSnapshotPauseReason.value = challenged
+              ? `取得${target.label}第 1 頁遇到 Cloudflare 挑戰，請換 IP 或等待 ${remaining} 秒後重試`
+              : `取得${target.label}第 1 頁失敗 ${failedAttempts} 次，緩衝 ${remaining} 秒後重試`
+            await sleep(1000)
+          }
+        }
+        return undefined
+      }
+
+      const firstPage = await fetchFirstGlobalSnapshotPageForScan()
       if (firstPage === undefined) {
         clearGlobalSnapshotProgress()
-        message.error(`${target.label}快照掃描失敗`)
+        if (!shouldStop()) {
+          message.error(`${target.label}快照掃描失敗`)
+        }
         return undefined
       }
       const firstPageResult = firstPage
@@ -2711,7 +2843,6 @@ export default defineComponent({
         retrySuccessPages,
       }
 
-      const shouldStop = () => globalSnapshotCancelled
       const retryQueuedPages = new Set<number>()
       const updateGlobalSnapshotProgress = () => {
         globalSnapshotScanProgress.value = {
