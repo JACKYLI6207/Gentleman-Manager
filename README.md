@@ -7,7 +7,7 @@
 Gentleman Manager 是一個以 **Tauri 2 + Vue 3 + Rust** 製作的 Windows 桌面管理工具，用於瀏覽、搜尋、下載、整理與本地閱讀 wnacg.com 漫畫內容。
 
 <p align="center">
-  <img src="./docs/preview.png" alt="Gentleman Manager preview" />
+  <img src="./Gentleman-Manager.JPG" alt="Gentleman Manager preview" />
 </p>
 
 本倉庫是適合放在 GitHub 上繼續開發的輕量原始碼版本，不包含 `node_modules/`、`dist/`、`src-tauri/target/`、EXE、ZIP 或本機備份檔。clone 後請依照 [DEVELOPMENT.md](./DEVELOPMENT.md) 安裝依賴與建置。
