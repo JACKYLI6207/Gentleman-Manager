@@ -25,6 +25,10 @@ src-tauri/target/
 icon-extracted.png
 icon-extracted.ico
 
+# Local snapshot exports
+Website Snapshot/
+repair/
+
 # Pre-edit backups (local only; see skill/SKILL.md)
 skill/backups/**
 !skill/backups/.gitkeep

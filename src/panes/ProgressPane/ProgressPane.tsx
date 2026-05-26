@@ -7,11 +7,21 @@ import UncompletedProgresses from './components/UncompletedProgresses.tsx'
 import CompletedProgress from './components/CompletedProgress.tsx'
 import FailedProgress from './components/FailedProgress.tsx'
 import styles from './ProgressPane.module.css'
-import { PhFolder, PhFolderOpen } from '@phosphor-icons/vue'
+import { PhFolder, PhFolderOpen, PhGearSix, PhSidebarSimple } from '@phosphor-icons/vue'
 
 export default defineComponent({
   name: 'ProgressPane',
-  setup() {
+  props: {
+    onOpenSettings: {
+      type: Function as () => () => void,
+      required: true,
+    },
+    onToggleRightPane: {
+      type: Function as () => () => void,
+      required: true,
+    },
+  },
+  setup(props) {
     const store = useStore()
 
     const downloadSpeed = ref<string>('')
@@ -82,6 +92,24 @@ export default defineComponent({
                 ),
               }}
             </NButton>
+            <NButton class="w-10" size="small" title="設定" onClick={props.onOpenSettings}>
+              {{
+                icon: () => (
+                  <NIcon size={20}>
+                    <PhGearSix />
+                  </NIcon>
+                ),
+              }}
+            </NButton>
+            <NButton class="w-10" size="small" title="隱藏下載列表" onClick={props.onToggleRightPane}>
+              {{
+                icon: () => (
+                  <NIcon size={20}>
+                    <PhSidebarSimple />
+                  </NIcon>
+                ),
+              }}
+            </NButton>
           </NInputGroup>
         </div>
         <NTabs
@@ -93,7 +121,11 @@ export default defineComponent({
           {{
             default: () => (
               <>
-                <NTabPane class="h-full p-0! overflow-hidden" name="uncompleted" tab="下載佇列" display-directive="show">
+                <NTabPane
+                  class="h-full p-0! overflow-hidden"
+                  name="uncompleted"
+                  tab="下載佇列"
+                  display-directive="show">
                   <UncompletedProgresses />
                 </NTabPane>
                 <NTabPane class="h-full p-0! overflow-hidden" name="failed" tab="下載失敗" display-directive="show">

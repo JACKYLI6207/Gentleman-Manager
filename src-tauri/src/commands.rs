@@ -1,7 +1,7 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::Context;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 use tauri_specta::Event;
 use tokio::{task::JoinSet, time::sleep};
@@ -110,11 +110,12 @@ pub async fn search_by_keyword(
     keyword: String,
     page_num: i64,
     cate_id: Option<i64>,
+    scan_mode: Option<String>,
 ) -> CommandResult<SearchResult> {
     let wnacg_client = app.get_wnacg_client();
 
     let search_result = wnacg_client
-        .search_by_keyword(&keyword, page_num, cate_id)
+        .search_by_keyword(&keyword, page_num, cate_id, scan_mode.as_deref())
         .await
         .map_err(|err| CommandError::from("關鍵詞搜尋失敗", err))?;
     tracing::debug!("關鍵詞搜尋成功");
@@ -128,11 +129,12 @@ pub async fn search_by_tag(
     tag_name: String,
     page_num: i64,
     cate_id: Option<i64>,
+    scan_mode: Option<String>,
 ) -> CommandResult<SearchResult> {
     let wnacg_client = app.get_wnacg_client();
 
     let search_result = wnacg_client
-        .search_by_tag(&tag_name, page_num, cate_id)
+        .search_by_tag(&tag_name, page_num, cate_id, scan_mode.as_deref())
         .await
         .map_err(|err| CommandError::from("按標籤搜尋失敗", err))?;
     tracing::debug!("標籤搜尋成功");
@@ -143,6 +145,13 @@ pub async fn search_by_tag(
 #[specta::specta]
 pub fn cancel_scoped_search_scan(app: AppHandle) -> CommandResult<()> {
     app.get_wnacg_client().cancel_scoped_scan();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn advance_scoped_search_scan(app: AppHandle) -> CommandResult<()> {
+    app.get_wnacg_client().advance_scoped_scan();
     Ok(())
 }
 
@@ -285,11 +294,7 @@ pub fn prepare_korean_series_folder(
 
     if let Ok(entries) = std::fs::read_dir(&download_dir) {
         for entry in entries.flatten() {
-            if !entry
-                .file_type()
-                .map(|t| t.is_dir())
-                .unwrap_or(false)
-            {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 continue;
             }
             has_any_subdirectory = true;
@@ -474,6 +479,236 @@ pub fn show_path_in_file_manager(app: AppHandle, path: &str) -> CommandResult<()
         .map_err(|err| CommandError::from("在檔案總管中開啟失敗", err))?;
     tracing::debug!("在檔案總管中開啟成功");
     Ok(())
+}
+
+fn latest_leveldb_data_file(dir: PathBuf) -> anyhow::Result<PathBuf> {
+    let mut candidates = Vec::new();
+    for entry in
+        std::fs::read_dir(&dir).with_context(|| format!("讀取資料目錄`{}`失敗", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let is_data_file = (file_name.ends_with(".ldb") || file_name.ends_with(".log"))
+            && file_name.chars().next().is_some_and(|c| c.is_ascii_digit());
+        if !is_data_file {
+            continue;
+        }
+        let modified = entry.metadata()?.modified()?;
+        candidates.push((modified, path));
+    }
+
+    candidates
+        .into_iter()
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+        .ok_or_else(|| anyhow::anyhow!("找不到快照資料檔"))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command(async)]
+#[specta::specta]
+pub fn show_snapshot_data_file(app: AppHandle, snapshot_kind: &str) -> CommandResult<String> {
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .context("取得快照資料資料夾失敗")
+        .map_err(|err| CommandError::from("取得快照資料資料夾失敗", err))?;
+    let data_dir = match snapshot_kind {
+        "global" => app_data_dir
+            .join("EBWebView")
+            .join("Default")
+            .join("IndexedDB")
+            .join("http_tauri.localhost_0.indexeddb.leveldb"),
+        "scoped" => app_data_dir
+            .join("EBWebView")
+            .join("Default")
+            .join("Local Storage")
+            .join("leveldb"),
+        _ => {
+            return Err(CommandError::from(
+                "開啟快照資料檔失敗",
+                anyhow::anyhow!("未知的快照種類：{snapshot_kind}"),
+            ));
+        }
+    };
+    let data_file = latest_leveldb_data_file(data_dir)
+        .map_err(|err| CommandError::from("尋找快照資料檔失敗", err))?;
+    let path_string = data_file.display().to_string();
+    app.opener()
+        .reveal_item_in_dir(&data_file)
+        .context(format!("定位快照資料檔`{path_string}`失敗"))
+        .map_err(|err| CommandError::from("定位快照資料檔失敗", err))?;
+    tracing::debug!(path = %path_string, "定位快照資料檔成功");
+    Ok(path_string)
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn write_snapshot_export_file(path: &str, content: &str) -> CommandResult<()> {
+    std::fs::write(path, content)
+        .context(format!("寫入快照存檔`{path}`失敗"))
+        .map_err(|err| CommandError::from("寫入快照存檔失敗", err))?;
+    tracing::debug!(path, "寫入快照存檔成功");
+    Ok(())
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn read_snapshot_export_file(path: &str) -> CommandResult<String> {
+    let content = std::fs::read_to_string(path)
+        .context(format!("讀取快照存檔`{path}`失敗"))
+        .map_err(|err| CommandError::from("讀取快照存檔失敗", err))?;
+    tracing::debug!(path, "讀取快照存檔成功");
+    Ok(content)
+}
+
+fn exe_base_dir() -> anyhow::Result<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from))
+        .ok_or_else(|| anyhow::anyhow!("找不到 EXE 所在目錄"))
+}
+
+fn safe_output_file_name(file_name: &str) -> anyhow::Result<String> {
+    let name = PathBuf::from(file_name)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .ok_or_else(|| anyhow::anyhow!("輸出檔名無效"))?;
+    if name.trim().is_empty() || name.contains("..") {
+        return Err(anyhow::anyhow!("輸出檔名無效"));
+    }
+    Ok(name)
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn write_snapshot_repair_file(file_name: &str, content: &str) -> CommandResult<String> {
+    let file_name = safe_output_file_name(file_name)
+        .map_err(|err| CommandError::from("建立 repair 檔名失敗", err))?;
+    let repair_dir = exe_base_dir()
+        .map_err(|err| CommandError::from("建立 repair 目錄失敗", err))?
+        .join("repair");
+    std::fs::create_dir_all(&repair_dir)
+        .context(format!("建立 repair 目錄`{}`失敗", repair_dir.display()))
+        .map_err(|err| CommandError::from("建立 repair 目錄失敗", err))?;
+    let path = repair_dir.join(file_name);
+    std::fs::write(&path, content)
+        .context(format!("寫入 repair 檔案`{}`失敗", path.display()))
+        .map_err(|err| CommandError::from("寫入 repair 檔案失敗", err))?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn write_snapshot_root_file(file_name: &str, content: &str) -> CommandResult<String> {
+    let file_name = safe_output_file_name(file_name)
+        .map_err(|err| CommandError::from("建立根目錄檔名失敗", err))?;
+    let path = exe_base_dir()
+        .map_err(|err| CommandError::from("建立根目錄輸出路徑失敗", err))?
+        .join(file_name);
+    std::fs::write(&path, content)
+        .context(format!("寫入根目錄檔案`{}`失敗", path.display()))
+        .map_err(|err| CommandError::from("寫入根目錄檔案失敗", err))?;
+    Ok(path.display().to_string())
+}
+
+fn is_snapshot_timestamp(value: &str) -> bool {
+    if value.len() != 19 {
+        return false;
+    }
+    value.chars().enumerate().all(|(index, ch)| match index {
+        4 | 7 | 10 | 13 | 16 => ch == '_',
+        _ => ch.is_ascii_digit(),
+    })
+}
+
+fn website_snapshot_file_prefix(file_name: &str) -> &str {
+    let stem = file_name
+        .strip_suffix(".gm-snapshot.json")
+        .unwrap_or(file_name);
+    if stem.len() > 20 {
+        let split_at = stem.len() - 20;
+        let (prefix, timestamp_with_space) = stem.split_at(split_at);
+        if let Some(timestamp) = timestamp_with_space.strip_prefix(' ') {
+            if is_snapshot_timestamp(timestamp) {
+                return prefix;
+            }
+        }
+    }
+    stem
+}
+
+fn unique_old_snapshot_path(old_dir: &std::path::Path, file_name: &str) -> PathBuf {
+    let candidate = old_dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let stem = file_name
+        .strip_suffix(".gm-snapshot.json")
+        .unwrap_or(file_name);
+    for index in 1.. {
+        let candidate = old_dir.join(format!("{stem} ({index}).gm-snapshot.json"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unique snapshot path loop should always return")
+}
+
+fn archive_existing_website_snapshots(snapshot_dir: &std::path::Path, file_name: &str) -> anyhow::Result<()> {
+    let prefix = website_snapshot_file_prefix(file_name);
+    let mut old_dir_created = false;
+    let old_dir = snapshot_dir.join("old");
+    for entry in std::fs::read_dir(snapshot_dir)
+        .context(format!("讀取 Website Snapshot 目錄`{}`失敗", snapshot_dir.display()))?
+    {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let existing_name = entry.file_name().to_string_lossy().to_string();
+        if !existing_name.ends_with(".gm-snapshot.json") {
+            continue;
+        }
+        if website_snapshot_file_prefix(&existing_name) != prefix {
+            continue;
+        }
+        if !old_dir_created {
+            std::fs::create_dir_all(&old_dir)
+                .context(format!("建立 Website Snapshot old 目錄`{}`失敗", old_dir.display()))?;
+            old_dir_created = true;
+        }
+        let destination = unique_old_snapshot_path(&old_dir, &existing_name);
+        std::fs::rename(entry.path(), &destination).or_else(|_| {
+            std::fs::copy(entry.path(), &destination)?;
+            std::fs::remove_file(entry.path())
+        })?;
+    }
+    Ok(())
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn write_snapshot_website_file(file_name: &str, content: &str) -> CommandResult<String> {
+    let file_name = safe_output_file_name(file_name)
+        .map_err(|err| CommandError::from("建立 Website Snapshot 檔名失敗", err))?;
+    let snapshot_dir = exe_base_dir()
+        .map_err(|err| CommandError::from("建立 Website Snapshot 目錄失敗", err))?
+        .join("Website Snapshot");
+    std::fs::create_dir_all(&snapshot_dir)
+        .context(format!("建立 Website Snapshot 目錄`{}`失敗", snapshot_dir.display()))
+        .map_err(|err| CommandError::from("建立 Website Snapshot 目錄失敗", err))?;
+    archive_existing_website_snapshots(&snapshot_dir, &file_name)
+        .map_err(|err| CommandError::from("移置 Website Snapshot 舊檔失敗", err))?;
+    let path = snapshot_dir.join(file_name);
+    std::fs::write(&path, content)
+        .context(format!("寫入 Website Snapshot 檔案`{}`失敗", path.display()))
+        .map_err(|err| CommandError::from("寫入 Website Snapshot 檔案失敗", err))?;
+    Ok(path.display().to_string())
 }
 
 #[allow(clippy::needless_pass_by_value)]

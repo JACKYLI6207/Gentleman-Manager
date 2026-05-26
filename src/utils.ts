@@ -64,7 +64,10 @@ export function parseTagSearchLink(input: string): { tagSlug: string; page: numb
   return undefined
 }
 
-export type SearchSortOrder = 'createDateAsc' | 'createDateDesc' | 'titleAsc' | 'titleDesc'
+export type SearchSortOrder = 'createDateAsc' | 'createDateDesc' | 'titleAsc' | 'titleDesc' | 'comicIdAsc' | 'comicIdDesc'
+
+export const DEFAULT_SEARCH_SORT_ORDER: SearchSortOrder = 'comicIdDesc'
+const SEARCH_SORT_ORDER_STORAGE_KEY = 'searchSortOrder'
 
 /** 搜尋結果卡片只顯示「N張照片/圖片」，不含創建時間等後綴 */
 export function formatSearchPhotoInfo(additionalInfo: string): string {
@@ -93,7 +96,7 @@ export function compareComicTitle(a: string, b: string): number {
   return a.localeCompare(b, 'zh-Hant', { numeric: true, sensitivity: 'base' })
 }
 
-export function sortSearchComics<T extends { title: string; additionalInfo: string }>(
+export function sortSearchComics<T extends { id: number; title: string; additionalInfo: string }>(
   comics: T[],
   order: SearchSortOrder,
 ): T[] {
@@ -108,17 +111,36 @@ export function sortSearchComics<T extends { title: string; additionalInfo: stri
         return compareComicTitle(a.title, b.title)
       case 'titleDesc':
         return compareComicTitle(b.title, a.title)
+      case 'comicIdAsc':
+        return a.id - b.id
+      case 'comicIdDesc':
+        return b.id - a.id
     }
   })
   return sorted
 }
 
 export const SEARCH_SORT_OPTIONS: { label: string; key: SearchSortOrder }[] = [
-  { label: '創建日期升序', key: 'createDateAsc' },
+  { label: 'ID編號降序', key: 'comicIdDesc' },
+  { label: 'ID編號升序', key: 'comicIdAsc' },
   { label: '創建日期降序', key: 'createDateDesc' },
-  { label: '漫畫名稱升序', key: 'titleAsc' },
+  { label: '創建日期升序', key: 'createDateAsc' },
   { label: '漫畫名稱降序', key: 'titleDesc' },
+  { label: '漫畫名稱升序', key: 'titleAsc' },
 ]
+
+export function isSearchSortOrder(value: string): value is SearchSortOrder {
+  return SEARCH_SORT_OPTIONS.some((option) => option.key === value)
+}
+
+export function loadSavedSearchSortOrder(): SearchSortOrder {
+  const saved = localStorage.getItem(SEARCH_SORT_ORDER_STORAGE_KEY)
+  return saved !== null && isSearchSortOrder(saved) ? saved : DEFAULT_SEARCH_SORT_ORDER
+}
+
+export function saveSearchSortOrder(order: SearchSortOrder) {
+  localStorage.setItem(SEARCH_SORT_ORDER_STORAGE_KEY, order)
+}
 
 /** 官網閱讀用圖片列表（過濾收藏提示圖） */
 export function getReaderPages(imgList: ImgInImgList[]): ImgInImgList[] {

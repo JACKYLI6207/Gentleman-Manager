@@ -6,15 +6,23 @@ import zipfile
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 built_exe = os.path.join(project_root, "src-tauri", "target", "release-fast", "Gentleman-Manager.exe")
-output_exe = os.path.join(project_root, "Gentleman-Manager.exe")
-output_alt = os.path.join(project_root, "Gentleman-Manager-new.exe")
-output_zip = os.path.join(project_root, "Gentleman-Manager.zip")
+output_exe = os.path.join(project_root, "Gentleman-Manager-v1.2.exe")
+output_alt = os.path.join(project_root, "Gentleman-Manager-v1.2-new.exe")
+output_zip = os.path.join(project_root, "Gentleman-Manager-v1.2.zip")
+legacy_outputs = (
+    os.path.join(project_root, "Gentleman-Manager.exe"),
+    os.path.join(project_root, "Gentleman-Manager-new.exe"),
+    os.path.join(project_root, "Gentleman-Manager.zip"),
+    os.path.join(project_root, "Gentleman-Manager-v1.1.exe"),
+    os.path.join(project_root, "Gentleman-Manager-v1.1-new.exe"),
+    os.path.join(project_root, "Gentleman-Manager-v1.1.zip"),
+)
 
 if not os.path.isfile(built_exe):
     print(f"ERROR: built exe not found: {built_exe}", file=sys.stderr)
     sys.exit(1)
 
-for path in (output_exe, output_alt, output_zip):
+for path in (output_exe, output_alt, output_zip, *legacy_outputs):
     if os.path.isfile(path):
         try:
             os.remove(path)

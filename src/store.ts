@@ -91,6 +91,14 @@ export const useStore = defineStore('store', () => {
     saveFavoriteSearchTabs(favoriteSearchTabs.value)
   }
 
+  function upsertFavoriteSearchTab(bookmark: SearchTabBookmark) {
+    favoriteSearchTabs.value = [
+      bookmark,
+      ...favoriteSearchTabs.value.filter((item) => item.id !== bookmark.id),
+    ]
+    saveFavoriteSearchTabs(favoriteSearchTabs.value)
+  }
+
   function reloadFavoriteSearchTabs() {
     favoriteSearchTabs.value = loadFavoriteSearchTabs()
   }
@@ -284,6 +292,7 @@ export const useStore = defineStore('store', () => {
     isFavoriteSearchTab,
     toggleFavoriteSearchTab,
     removeFavoriteSearchTabById,
+    upsertFavoriteSearchTab,
     reloadFavoriteSearchTabs,
     setProgress,
     deleteProgress,

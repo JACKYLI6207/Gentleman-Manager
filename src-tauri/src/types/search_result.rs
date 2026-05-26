@@ -393,6 +393,10 @@ pub struct ComicInSearch {
 }
 
 impl ComicInSearch {
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+
     pub fn from_ranking_li(app: &AppHandle, li: &ElementRef) -> anyhow::Result<ComicInSearch> {
         match Self::from_li(app, li) {
             Ok(comic) => return Ok(comic),
@@ -401,7 +405,8 @@ impl ComicInSearch {
 
         let li_html = li.html();
         let comic_link_selector = Selector::parse("a[href*=\"/photos-index-aid-\"]").to_anyhow()?;
-        let caption_selector = Selector::parse(".caption a[href*=\"/photos-index-aid-\"]").to_anyhow()?;
+        let caption_selector =
+            Selector::parse(".caption a[href*=\"/photos-index-aid-\"]").to_anyhow()?;
         let title_a = li
             .select(&comic_link_selector)
             .chain(li.select(&caption_selector))
@@ -436,8 +441,8 @@ impl ComicInSearch {
         let href = title_a
             .attr("href")
             .context(format!("沒有在標題的<a>中找到href屬性: {title_a_html}"))?;
-        let id = comic_id_from_href(href)
-            .context(format!("無法從 href 解析漫畫 id: {title_a_html}"))?;
+        let id =
+            comic_id_from_href(href).context(format!("無法從 href 解析漫畫 id: {title_a_html}"))?;
 
         let title_html = title_a
             .attr("title")

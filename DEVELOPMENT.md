@@ -32,8 +32,8 @@ powershell -ExecutionPolicy Bypass -File .\skill\scripts\rebuild-exe.ps1
 
 產物預設在 `src-tauri\target\release-fast\Gentleman-Manager.exe`。腳本會另外在專案根目錄產生：
 
-- `Gentleman-Manager.exe`
-- `Gentleman-Manager.zip`
+- `Gentleman-Manager-v1.2.exe`
+- `Gentleman-Manager-v1.2.zip`
 
 圖示：根目錄放置 `logo.ico` 後執行上述腳本；若無則從既有 EXE 抽取。
 

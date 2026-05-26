@@ -214,7 +214,6 @@ async fn file_log_watcher(app: AppHandle) {
 
 pub fn logs_dir(app: &AppHandle) -> anyhow::Result<std::path::PathBuf> {
     let _ = app;
-    let app_data_dir = crate::utils::app_data_dir()
-        .context("獲取app_data_dir目錄失敗")?;
+    let app_data_dir = crate::utils::app_data_dir().context("獲取app_data_dir目錄失敗")?;
     Ok(app_data_dir.join("日誌"))
 }

@@ -13,12 +13,18 @@ import {
   saveSearchLayout,
   type SearchResultLayout,
 } from '../comicBrowseLayout.ts'
-import { sortSearchComics, SEARCH_SORT_OPTIONS, type SearchSortOrder } from '../utils.ts'
+import {
+  loadSavedSearchSortOrder,
+  saveSearchSortOrder,
+  sortSearchComics,
+  SEARCH_SORT_OPTIONS,
+  type SearchSortOrder,
+} from '../utils.ts'
 
 export function useLocalComicBrowseList(comicsSource: Ref<ComicInSearch[]>) {
   const viewPage = ref(1)
   const pageSize = ref(loadSavedPageSize())
-  const sortOrder = ref<SearchSortOrder>('createDateDesc')
+  const sortOrder = ref<SearchSortOrder>(loadSavedSearchSortOrder())
   const searchResultLayout = ref<SearchResultLayout>(loadSavedSearchLayout())
   const sortedComics = ref<ComicInSearch[]>([])
   const visibleComics = ref<ComicInSearch[]>([])
@@ -117,6 +123,7 @@ export function useLocalComicBrowseList(comicsSource: Ref<ComicInSearch[]>) {
 
   function onSortChange(key: SearchSortOrder) {
     sortOrder.value = key
+    saveSearchSortOrder(key)
     applySortAndVisiblePage()
   }
 

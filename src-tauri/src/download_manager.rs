@@ -28,9 +28,9 @@ use crate::{
     download_task_store::{DownloadTaskStore, PersistedDownloadTask},
     events::{DownloadSleepingEvent, DownloadSpeedEvent, DownloadTaskEvent, ZipDownloadServer},
     extensions::{AnyhowErrorToStringChain, AppHandleExt},
-    utils::filename_filter,
     korean_txt_catalog,
     types::Comic,
+    utils::filename_filter,
     wnacg_client::WnacgClient,
     zip_download::{self, is_valid_zip_file, zip_part_path},
 };
@@ -149,7 +149,13 @@ impl DownloadManager {
         let download_dir = self.app.get_config().read().download_dir.clone();
         zip_download::cleanup_orphaned_zip_part_files(&download_dir);
 
-        if !self.app.get_config().read().download_format.is_server2_zip() {
+        if !self
+            .app
+            .get_config()
+            .read()
+            .download_format
+            .is_server2_zip()
+        {
             return;
         }
 
@@ -162,7 +168,9 @@ impl DownloadManager {
                 continue;
             };
             let path = PathBuf::from(path_str);
-            if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
                 && path.is_file()
                 && !is_valid_zip_file(&path)
             {
@@ -175,7 +183,7 @@ impl DownloadManager {
     fn restore_persisted_tasks(&self) {
         let records = DownloadTaskStore::load(&self.app);
         for record in records {
-            use DownloadTaskState::{Completed, Downloading, Failed, Paused, Pending, Cancelled};
+            use DownloadTaskState::{Cancelled, Completed, Downloading, Failed, Paused, Pending};
             match record.state {
                 Completed | Cancelled => {}
                 Pending | Downloading | Paused | Failed => {
@@ -298,10 +306,7 @@ impl DownloadManager {
             return;
         }
         match korean_txt_catalog::append_folder_line_to_catalog(&catalog_value, series_folder) {
-            Ok(true) => tracing::info!(
-                series_folder,
-                "韓漫系列下載完成，已追加至 TXT 收藏列表"
-            ),
+            Ok(true) => tracing::info!(series_folder, "韓漫系列下載完成，已追加至 TXT 收藏列表"),
             Ok(false) => {}
             Err(err) => tracing::warn!(
                 series_folder,
@@ -353,10 +358,7 @@ impl DownloadManager {
             let task_state = *task.state_sender.borrow();
 
             if matches!(task_state, Failed | Cancelled | Completed) {
-                Some((
-                    task.comic.as_ref().clone(),
-                    task.series_parent_dir.clone(),
-                ))
+                Some((task.comic.as_ref().clone(), task.series_parent_dir.clone()))
             } else {
                 task.set_state(Pending);
                 None
@@ -510,7 +512,13 @@ impl DownloadTask {
 
     #[allow(clippy::cast_possible_truncation)]
     async fn download_comic(&self) {
-        if self.app.get_config().read().download_format.is_server2_zip() {
+        if self
+            .app
+            .get_config()
+            .read()
+            .download_format
+            .is_server2_zip()
+        {
             self.download_comic_as_zip().await;
             return;
         }
@@ -674,9 +682,8 @@ impl DownloadTask {
                 if self.is_cancelled() || is_download_cancelled(&err) {
                     return;
                 }
-                let err_title = format!(
-                    "`{comic_title}`獲取 zip 下載資訊失敗（已重試 {max_attempts} 次）"
-                );
+                let err_title =
+                    format!("`{comic_title}`獲取 zip 下載資訊失敗（已重試 {max_attempts} 次）");
                 let string_chain = err.to_string_chain();
                 tracing::error!(err_title, message = string_chain);
                 self.set_state(DownloadTaskState::Failed);
@@ -1199,8 +1206,8 @@ impl DownloadTask {
             let name = entry.file_name().to_string_lossy().to_string();
             zip.start_file(&name, options)
                 .with_context(|| format!("ZIP 寫入檔頭`{name}`失敗"))?;
-            let mut source = File::open(&path)
-                .with_context(|| format!("開啟`{}`失敗", path.display()))?;
+            let mut source =
+                File::open(&path).with_context(|| format!("開啟`{}`失敗", path.display()))?;
             std::io::copy(&mut source, &mut zip)
                 .with_context(|| format!("寫入 ZIP 條目`{name}`失敗"))?;
         }
@@ -1332,8 +1339,7 @@ impl DownloadImgTask {
                 if download_task.is_cancelled() || is_download_cancelled(&err) {
                     return;
                 }
-                let err_title =
-                    format!("下載圖片`{url}`失敗（已重試 {max_attempts} 次）");
+                let err_title = format!("下載圖片`{url}`失敗（已重試 {max_attempts} 次）");
                 let string_chain = err.to_string_chain();
                 tracing::error!(err_title, message = string_chain);
                 return;
@@ -1365,9 +1371,7 @@ impl DownloadImgTask {
 
         let target_format = match img_format {
             ImageFormat::Gif => ImageFormat::Gif,
-            _ => download_format
-                .to_image_format()
-                .unwrap_or(img_format),
+            _ => download_format.to_image_format().unwrap_or(img_format),
         };
 
         let save_path_owned = save_path.clone();

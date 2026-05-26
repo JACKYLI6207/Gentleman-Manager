@@ -32,10 +32,7 @@ pub fn close_zip_reader_session() {
 
 fn open_zip_session(path: &Path) -> anyhow::Result<()> {
     let mut guard = zip_session().lock();
-    if guard
-        .as_ref()
-        .is_some_and(|session| session.path == path)
-    {
+    if guard.as_ref().is_some_and(|session| session.path == path) {
         return Ok(());
     }
     let file = File::open(path).context("開啟 ZIP 檔案失敗")?;
@@ -53,9 +50,7 @@ where
 {
     open_zip_session(path)?;
     let mut guard = zip_session().lock();
-    let session = guard
-        .as_mut()
-        .ok_or_else(|| anyhow!("ZIP 書庫未開啟"))?;
+    let session = guard.as_mut().ok_or_else(|| anyhow!("ZIP 書庫未開啟"))?;
     if session.path != path {
         return Err(anyhow!("ZIP 書庫路徑不符"));
     }
@@ -164,8 +159,12 @@ fn read_number<I: Iterator<Item = char>>(iter: &mut std::iter::Peekable<I>) -> u
 fn sort_paths_natural(paths: &mut [PathBuf]) {
     paths.sort_by(|a, b| {
         compare_natural(
-            &a.file_name().map(|name| name.to_string_lossy()).unwrap_or_default(),
-            &b.file_name().map(|name| name.to_string_lossy()).unwrap_or_default(),
+            &a.file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_default(),
+            &b.file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_default(),
         )
     });
 }

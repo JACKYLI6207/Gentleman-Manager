@@ -85,7 +85,11 @@ pub fn read_catalog_lines_from_path(path: &Path) -> anyhow::Result<Vec<String>> 
 /// 設定值：單一路徑，或多個以 `|` 分隔的路徑。
 pub fn read_catalog_lines_from_config_value(value: &str) -> anyhow::Result<Vec<String>> {
     let mut lines = Vec::new();
-    for part in value.split(PATH_LIST_SEPARATOR).map(str::trim).filter(|s| !s.is_empty()) {
+    for part in value
+        .split(PATH_LIST_SEPARATOR)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         let path = Path::new(part);
         if !path.exists() {
             tracing::warn!(path = %path.display(), "韓漫 TXT 路徑不存在，已略過");
@@ -107,7 +111,11 @@ fn resolve_append_target_file(config_value: &str) -> anyhow::Result<std::path::P
         .filter(|s| !s.is_empty())
     {
         let path = Path::new(part);
-        if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("txt")) {
+        if path.is_file()
+            && path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("txt"))
+        {
             return Ok(path.to_path_buf());
         }
     }
@@ -117,7 +125,10 @@ fn resolve_append_target_file(config_value: &str) -> anyhow::Result<std::path::P
 }
 
 /// 將韓漫系列資料夾名稱追加到 TXT 列表（若該行尚不存在）。
-pub fn append_folder_line_to_catalog(config_value: &str, folder_line: &str) -> anyhow::Result<bool> {
+pub fn append_folder_line_to_catalog(
+    config_value: &str,
+    folder_line: &str,
+) -> anyhow::Result<bool> {
     let trimmed = folder_line.trim();
     if trimmed.is_empty() {
         return Ok(false);

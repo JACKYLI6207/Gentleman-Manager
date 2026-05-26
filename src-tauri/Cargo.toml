@@ -1,6 +1,6 @@
 [package]
 name = "Gentleman-Manager"
-version = "0.1.0"
+version = "1.2.0"
 description = "A Tauri App"
 authors = ["JACKYLI6207"]
 edition = "2021"

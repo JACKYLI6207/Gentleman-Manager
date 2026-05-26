@@ -5,6 +5,7 @@ import SubmenuTabLabel from './SubmenuTabLabel.tsx'
 const FAVORITES_ITEMS = [
   { key: 'comics' as const, label: '收藏漫畫' },
   { key: 'tabs' as const, label: '收藏分頁' },
+  { key: 'scanCaches' as const, label: '收藏快照' },
 ]
 
 export default defineComponent({

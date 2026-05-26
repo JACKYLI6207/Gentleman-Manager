@@ -1,5 +1,5 @@
 ---
-description: 改動 src 或 src-tauri 後自動建置 Gentleman-Manager.exe / ZIP，無需使用者提醒
+description: 改動 src 或 src-tauri 後自動建置 Gentleman-Manager-v1.2.exe / ZIP，無需使用者提醒
 alwaysApply: true
 ---
 
@@ -22,4 +22,4 @@ powershell -ExecutionPolicy Bypass -File "skill\scripts\rebuild-exe.ps1"
 
 ## 回報
 
-完成後簡短告知產物路徑：`Gentleman-Manager.exe` 與 `Gentleman-Manager.zip`（若舊 EXE 佔用中，腳本會輸出 `Gentleman-Manager-new.exe`）。
+完成後簡短告知產物路徑：`Gentleman-Manager-v1.2.exe` 與 `Gentleman-Manager-v1.2.zip`（若舊 EXE 佔用中，腳本會輸出 `Gentleman-Manager-v1.2-new.exe`）。

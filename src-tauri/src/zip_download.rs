@@ -65,8 +65,8 @@ pub struct ZipDownloadInfo {
 }
 
 pub fn parse_zip_download_page(html: &str) -> anyhow::Result<ZipDownloadInfo> {
-    let file_name = extract_config_string(html, "FILE_NAME")
-        .context("無法從下載頁解析 FILE_NAME")?;
+    let file_name =
+        extract_config_string(html, "FILE_NAME").context("無法從下載頁解析 FILE_NAME")?;
     let backup_url = parse_backup_zip_url(html);
 
     Ok(ZipDownloadInfo {

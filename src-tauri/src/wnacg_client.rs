@@ -1,11 +1,10 @@
 use std::{
-    collections::HashMap,
     path::Path,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Context};
@@ -43,6 +42,33 @@ struct ScopedSearchCacheEntry {
     comics: Vec<ComicInSearch>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopedScanMode {
+    Conservative,
+    Aggressive,
+}
+
+impl ScopedScanMode {
+    fn from_value(value: Option<&str>) -> Self {
+        match value {
+            Some("aggressive") => Self::Aggressive,
+            _ => Self::Conservative,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ScopedPageFailure {
+    page: i64,
+    category: String,
+}
+
+#[derive(Debug, Clone)]
+struct ScopedBatchOutcome {
+    completed: bool,
+    page_failures: Vec<ScopedPageFailure>,
+}
+
 #[derive(Clone)]
 pub struct WnacgClient {
     app: AppHandle,
@@ -51,6 +77,7 @@ pub struct WnacgClient {
     cover_client: Client,
     scoped_search_cache: Arc<RwLock<Option<(String, ScopedSearchCacheEntry)>>>,
     scoped_scan_cancelled: Arc<AtomicBool>,
+    scoped_scan_request_signal: Arc<AtomicU64>,
 }
 
 impl WnacgClient {
@@ -69,6 +96,7 @@ impl WnacgClient {
             cover_client,
             scoped_search_cache: Arc::new(RwLock::new(None)),
             scoped_scan_cancelled: Arc::new(AtomicBool::new(false)),
+            scoped_scan_request_signal: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -76,8 +104,14 @@ impl WnacgClient {
         self.scoped_scan_cancelled.store(true, Ordering::Relaxed);
     }
 
+    pub fn advance_scoped_scan(&self) {
+        self.scoped_scan_request_signal
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn begin_scoped_scan(&self) {
         self.scoped_scan_cancelled.store(false, Ordering::Relaxed);
+        self.scoped_scan_request_signal.store(0, Ordering::Relaxed);
     }
 
     fn is_scoped_scan_cancelled(&self) -> bool {
@@ -97,6 +131,7 @@ impl WnacgClient {
         finished: bool,
         paused: bool,
         retry_in_secs: Option<i64>,
+        paused_reason: Option<&str>,
         cancelled: bool,
     ) {
         let _ = SearchScanProgressEvent {
@@ -107,18 +142,19 @@ impl WnacgClient {
             finished,
             paused,
             retry_in_secs,
+            paused_reason: paused_reason.map(str::to_string),
             cancelled,
         }
         .emit(&self.app);
     }
 
-    fn fail_scoped_scan_cancelled(
+    fn emit_scoped_scan_cancelled(
         &self,
         current: i64,
         total: i64,
         matched_count: i64,
         scan_kind: &str,
-    ) -> anyhow::Error {
+    ) {
         self.emit_search_scan_progress(
             current,
             total,
@@ -127,9 +163,9 @@ impl WnacgClient {
             true,
             false,
             None,
+            None,
             true,
         );
-        anyhow!("已取消掃描")
     }
 
     async fn wait_scoped_scan_retry(
@@ -138,11 +174,11 @@ impl WnacgClient {
         total: i64,
         matched_count: i64,
         scan_kind: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         const RETRY_SECS: i64 = 20;
         for remain in (1..=RETRY_SECS).rev() {
             if self.is_scoped_scan_cancelled() {
-                return Err(self.fail_scoped_scan_cancelled(current, total, matched_count, scan_kind));
+                return Ok(false);
             }
             self.emit_search_scan_progress(
                 current,
@@ -152,11 +188,43 @@ impl WnacgClient {
                 false,
                 true,
                 Some(remain),
+                None,
                 false,
             );
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        Ok(())
+        Ok(true)
+    }
+
+    async fn wait_manual_scoped_scan_request(
+        &self,
+        current: i64,
+        total: i64,
+        matched_count: i64,
+        scan_kind: &str,
+        paused_reason: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let signal = self.scoped_scan_request_signal.load(Ordering::Relaxed);
+        self.emit_search_scan_progress(
+            current,
+            total,
+            matched_count,
+            scan_kind,
+            false,
+            true,
+            None,
+            paused_reason,
+            false,
+        );
+        loop {
+            if self.is_scoped_scan_cancelled() {
+                return Ok(false);
+            }
+            if self.scoped_scan_request_signal.load(Ordering::Relaxed) != signal {
+                return Ok(true);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     pub fn reload_client(&self) {
@@ -235,10 +303,11 @@ impl WnacgClient {
         keyword: &str,
         page_num: i64,
         cate_id: Option<i64>,
+        scan_mode: Option<&str>,
     ) -> anyhow::Result<SearchResult> {
         if let Some(cate_id) = cate_id {
             return self
-                .search_keyword_in_category(keyword, cate_id, page_num)
+                .search_keyword_in_category(keyword, cate_id, page_num, scan_mode)
                 .await;
         }
 
@@ -283,16 +352,26 @@ impl WnacgClient {
         keyword: &str,
         cate_id: i64,
         page_num: i64,
+        scan_mode: Option<&str>,
     ) -> anyhow::Result<SearchResult> {
         const PAGE_SIZE: i64 = 20;
 
-        let cache_key = format!("k:{cate_id}:{keyword}");
-        let all_matches = self
-            .get_or_build_scoped_cache(&cache_key, || async {
-                self.collect_keyword_matches_in_category(keyword, cate_id)
+        let cache_key = format!("k:{keyword}");
+        let all_comics = if page_num <= 1 {
+            let comics = self
+                .collect_keyword_pages_for_scoped_cache(keyword, cate_id, scan_mode)
+                .await?;
+            self.store_scoped_cache(&cache_key, &comics);
+            comics
+        } else {
+            self.get_or_build_scoped_cache(&cache_key, || async {
+                self.collect_keyword_pages_for_scoped_cache(keyword, cate_id, scan_mode)
                     .await
             })
-            .await?;
+            .await?
+        };
+        let mut all_matches = Self::filter_comics_by_cate(&all_comics, cate_id);
+        all_matches.sort_by(|left, right| right.id().cmp(&left.id()));
 
         Ok(SearchResult::from_collected(
             all_matches,
@@ -302,18 +381,20 @@ impl WnacgClient {
         ))
     }
 
-    async fn collect_keyword_matches_in_category(
+    async fn collect_keyword_pages_for_scoped_cache(
         &self,
         keyword: &str,
         cate_id: i64,
+        scan_mode: Option<&str>,
     ) -> anyhow::Result<Vec<ComicInSearch>> {
         let first_page = self.fetch_keyword_search_page(keyword, 1).await?;
-        self.collect_scoped_matches_parallel(
+        self.collect_scoped_matches_paced(
             cate_id,
             "search",
             first_page,
             keyword.to_string(),
             false,
+            ScopedScanMode::from_value(scan_mode),
         )
         .await
     }
@@ -323,10 +404,11 @@ impl WnacgClient {
         tag_name: &str,
         page_num: i64,
         cate_id: Option<i64>,
+        scan_mode: Option<&str>,
     ) -> anyhow::Result<SearchResult> {
         if let Some(cate_id) = cate_id {
             return self
-                .search_tag_in_category(tag_name, cate_id, page_num)
+                .search_tag_in_category(tag_name, cate_id, page_num, scan_mode)
                 .await;
         }
 
@@ -335,11 +417,7 @@ impl WnacgClient {
         self.fetch_tag_page(tag_name, page_num).await
     }
 
-    async fn fetch_tag_page(
-        &self,
-        tag_name: &str,
-        page_num: i64,
-    ) -> anyhow::Result<SearchResult> {
+    async fn fetch_tag_page(&self, tag_name: &str, page_num: i64) -> anyhow::Result<SearchResult> {
         let api_domain = self.get_api_domain();
         // 第 1 頁常見為 albums-index-tag-{tag}.html；分頁為 albums-index-page-{n}-tag-{tag}.html
         let url = if page_num <= 1 {
@@ -370,16 +448,26 @@ impl WnacgClient {
         tag_name: &str,
         cate_id: i64,
         page_num: i64,
+        scan_mode: Option<&str>,
     ) -> anyhow::Result<SearchResult> {
         const PAGE_SIZE: i64 = 20;
 
-        let cache_key = format!("t:{cate_id}:{tag_name}");
-        let all_matches = self
-            .get_or_build_scoped_cache(&cache_key, || async {
-                self.collect_tag_matches_in_category(tag_name, cate_id)
+        let cache_key = format!("t:{tag_name}");
+        let all_comics = if page_num <= 1 {
+            let comics = self
+                .collect_tag_pages_for_scoped_cache(tag_name, cate_id, scan_mode)
+                .await?;
+            self.store_scoped_cache(&cache_key, &comics);
+            comics
+        } else {
+            self.get_or_build_scoped_cache(&cache_key, || async {
+                self.collect_tag_pages_for_scoped_cache(tag_name, cate_id, scan_mode)
                     .await
             })
-            .await?;
+            .await?
+        };
+        let mut all_matches = Self::filter_comics_by_cate(&all_comics, cate_id);
+        all_matches.sort_by(|left, right| right.id().cmp(&left.id()));
 
         Ok(SearchResult::from_collected(
             all_matches,
@@ -389,175 +477,740 @@ impl WnacgClient {
         ))
     }
 
-    async fn collect_tag_matches_in_category(
+    async fn collect_tag_pages_for_scoped_cache(
         &self,
         tag_name: &str,
         cate_id: i64,
+        scan_mode: Option<&str>,
     ) -> anyhow::Result<Vec<ComicInSearch>> {
         let first_page = self.fetch_tag_page(tag_name, 1).await?;
-        self.collect_scoped_matches_parallel(
+        self.collect_scoped_matches_paced(
             cate_id,
             "tag",
             first_page,
             tag_name.to_string(),
             true,
+            ScopedScanMode::from_value(scan_mode),
         )
         .await
     }
 
-    fn filter_comics_by_cate(page: &SearchResult, cate_id: i64) -> Vec<ComicInSearch> {
-        page.comics()
+    fn filter_comics_by_cate(comics: &[ComicInSearch], cate_id: i64) -> Vec<ComicInSearch> {
+        comics
             .iter()
-            .filter(|comic| comic.list_cate_id() == Some(cate_id))
+            .filter(|comic| Self::comic_matches_cate_scope(comic, cate_id))
             .cloned()
             .collect()
     }
 
-    async fn collect_scoped_matches_parallel(
+    fn comic_matches_cate_scope(comic: &ComicInSearch, cate_id: i64) -> bool {
+        let Some(list_cate_id) = comic.list_cate_id() else {
+            return false;
+        };
+        Self::cate_id_matches_scope(list_cate_id, cate_id)
+    }
+
+    fn cate_id_matches_scope(list_cate_id: i64, cate_id: i64) -> bool {
+        list_cate_id == cate_id
+            || match cate_id {
+                5 => matches!(list_cate_id, 1 | 12 | 16 | 2 | 37 | 22 | 3),
+                6 => matches!(list_cate_id, 9 | 13 | 17),
+                7 => matches!(list_cate_id, 10 | 14 | 18),
+                19 => matches!(list_cate_id, 20 | 21),
+                _ => false,
+            }
+    }
+
+    async fn wait_scoped_search_page_turn(&self, next_page: i64) -> anyhow::Result<bool> {
+        const BASE_DELAY_MS: u64 = 500;
+        const JITTER_MS: u64 = 1000;
+        const COOLDOWN_EVERY_PAGES: i64 = 25;
+        const COOLDOWN_MS: u64 = 6000;
+
+        let page = next_page.max(1) as u64;
+        let mut delay_ms = BASE_DELAY_MS + ((page * 137) % JITTER_MS);
+        if next_page > 2 && (next_page - 2) % COOLDOWN_EVERY_PAGES == 0 {
+            delay_ms += COOLDOWN_MS;
+        }
+
+        let mut elapsed_ms = 0_u64;
+        while elapsed_ms < delay_ms {
+            if self.is_scoped_scan_cancelled() {
+                return Ok(false);
+            }
+            let step_ms = (delay_ms - elapsed_ms).min(250);
+            tokio::time::sleep(Duration::from_millis(step_ms)).await;
+            elapsed_ms += step_ms;
+        }
+        Ok(true)
+    }
+
+    async fn fetch_scoped_search_page(
+        &self,
+        query: &str,
+        page: i64,
+        is_tag: bool,
+    ) -> anyhow::Result<SearchResult> {
+        if is_tag {
+            self.fetch_tag_page(query, page).await
+        } else {
+            self.fetch_keyword_search_page(query, page).await
+        }
+    }
+
+    fn random_page_span(min: i64, max: i64, salt: i64) -> i64 {
+        let range = (max - min + 1).max(1) as u64;
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as u64)
+            .unwrap_or_default();
+        let mut seed = nanos ^ (salt as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        seed ^= seed >> 30;
+        seed = seed.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        seed ^= seed >> 27;
+        seed = seed.wrapping_mul(0x94D0_49BB_1331_11EB);
+        seed ^= seed >> 31;
+        min + (seed % range) as i64
+    }
+
+    fn classify_scan_failure(reason: &str) -> &'static str {
+        let lower = reason.to_lowercase();
+        if lower.contains("timeout") || lower.contains("timed out") || lower.contains("deadline") {
+            "超時"
+        } else if lower.contains("just a moment")
+            || lower.contains("challenges.cloudflare.com")
+            || lower.contains("/cdn-cgi/challenge-platform")
+            || lower.contains("cf-chl-")
+            || lower.contains("enable javascript and cookies")
+        {
+            "被拒絕"
+        } else if lower.contains("429") || lower.contains("too many") {
+            "請求過於頻繁"
+        } else if lower.contains("status") || lower.contains("狀態碼") {
+            "HTTP錯誤"
+        } else {
+            "其他錯誤"
+        }
+    }
+
+    fn append_scoped_page_result(
+        &self,
+        cate_id: i64,
+        total_pages: i64,
+        scan_kind: &str,
+        page_result: &SearchResult,
+        all_comics: &mut Vec<ComicInSearch>,
+        matched_count: &mut i64,
+        completed: &mut i64,
+    ) {
+        *matched_count += Self::filter_comics_by_cate(page_result.comics(), cate_id).len() as i64;
+        all_comics.extend(page_result.comics().iter().cloned());
+        *completed += 1;
+        self.emit_search_scan_progress(
+            *completed,
+            total_pages,
+            *matched_count,
+            scan_kind,
+            *completed >= total_pages,
+            false,
+            None,
+            None,
+            false,
+        );
+    }
+
+    async fn fetch_scoped_search_page_with_retry(
+        &self,
+        query: &str,
+        page: i64,
+        is_tag: bool,
+        completed: i64,
+        total_pages: i64,
+        matched_count: i64,
+        scan_kind: &str,
+    ) -> anyhow::Result<Option<SearchResult>> {
+        let mut attempt = 0_u32;
+        loop {
+            if self.is_scoped_scan_cancelled() {
+                return Ok(None);
+            }
+
+            attempt += 1;
+            if attempt > 1
+                && !self
+                    .wait_scoped_scan_retry(completed, total_pages, matched_count, scan_kind)
+                    .await?
+            {
+                return Ok(None);
+            }
+
+            if let Ok(result) = self.fetch_scoped_search_page(query, page, is_tag).await {
+                return Ok(Some(result));
+            }
+        }
+    }
+
+    async fn collect_scoped_matches_parallel_batch(
+        &self,
+        cate_id: i64,
+        scan_kind: &str,
+        total_pages: i64,
+        query: &str,
+        is_tag: bool,
+        start_page: i64,
+        end_page: i64,
+        retry_failed: bool,
+        all_comics: &mut Vec<ComicInSearch>,
+        matched_count: &mut i64,
+        completed: &mut i64,
+    ) -> anyhow::Result<ScopedBatchOutcome> {
+        let mut join_set = tokio::task::JoinSet::new();
+        let mut page_results: Vec<(i64, SearchResult)> =
+            Vec::with_capacity((end_page - start_page + 1).max(0) as usize);
+        let mut failed_pages = Vec::new();
+        let mut page_failures = Vec::new();
+
+        for page in start_page..=end_page {
+            if self.is_scoped_scan_cancelled() {
+                return Ok(ScopedBatchOutcome {
+                    completed: false,
+                    page_failures,
+                });
+            }
+
+            let client = self.clone();
+            let page_query = query.to_string();
+            join_set.spawn(async move {
+                let result = client
+                    .fetch_scoped_search_page(&page_query, page, is_tag)
+                    .await;
+                (page, result)
+            });
+        }
+
+        while !join_set.is_empty() {
+            tokio::select! {
+                joined = join_set.join_next() => {
+                    let Some(joined) = joined else {
+                        break;
+                    };
+                    let (page, page_result) = joined.context("分類快速掃描任務失敗")?;
+                    match page_result {
+                        Ok(page_result) => page_results.push((page, page_result)),
+                        Err(err) => {
+                            let reason = err.to_string_chain();
+                            page_failures.push(ScopedPageFailure {
+                                page,
+                                category: Self::classify_scan_failure(&reason).to_string(),
+                            });
+                            failed_pages.push((page, reason));
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+            }
+
+            if self.is_scoped_scan_cancelled() {
+                join_set.abort_all();
+                return Ok(ScopedBatchOutcome {
+                    completed: false,
+                    page_failures,
+                });
+            }
+        }
+
+        failed_pages.sort_unstable_by_key(|(page, _)| *page);
+        if !retry_failed && !failed_pages.is_empty() {
+            page_results.sort_by_key(|(page, _)| *page);
+            for (_, page_result) in page_results.drain(..) {
+                self.append_scoped_page_result(
+                    cate_id,
+                    total_pages,
+                    scan_kind,
+                    &page_result,
+                    all_comics,
+                    matched_count,
+                    completed,
+                );
+            }
+            return Ok(ScopedBatchOutcome {
+                completed: false,
+                page_failures,
+            });
+        }
+        for (page, _) in failed_pages {
+            let Some(page_result) = self
+                .fetch_scoped_search_page_with_retry(
+                    query,
+                    page,
+                    is_tag,
+                    *completed,
+                    total_pages,
+                    *matched_count,
+                    scan_kind,
+                )
+                .await?
+            else {
+                page_results.sort_by_key(|(page, _)| *page);
+                for (_, page_result) in page_results.drain(..) {
+                    self.append_scoped_page_result(
+                        cate_id,
+                        total_pages,
+                        scan_kind,
+                        &page_result,
+                        all_comics,
+                        matched_count,
+                        completed,
+                    );
+                }
+                return Ok(ScopedBatchOutcome {
+                    completed: false,
+                    page_failures,
+                });
+            };
+            page_results.push((page, page_result));
+        }
+
+        page_results.sort_by_key(|(page, _)| *page);
+        for (_, page_result) in page_results {
+            self.append_scoped_page_result(
+                cate_id,
+                total_pages,
+                scan_kind,
+                &page_result,
+                all_comics,
+                matched_count,
+                completed,
+            );
+        }
+
+        Ok(ScopedBatchOutcome {
+            completed: true,
+            page_failures,
+        })
+    }
+
+    async fn collect_scoped_matches_paced_batch(
+        &self,
+        cate_id: i64,
+        scan_kind: &str,
+        total_pages: i64,
+        query: &str,
+        is_tag: bool,
+        start_page: i64,
+        end_page: i64,
+        all_comics: &mut Vec<ComicInSearch>,
+        matched_count: &mut i64,
+        completed: &mut i64,
+    ) -> anyhow::Result<bool> {
+        for page in (start_page..=end_page).rev() {
+            if self.is_scoped_scan_cancelled() {
+                return Ok(false);
+            }
+
+            if !self.wait_scoped_search_page_turn(page).await? {
+                return Ok(false);
+            }
+
+            let Some(page_result) = self
+                .fetch_scoped_search_page_with_retry(
+                    query,
+                    page,
+                    is_tag,
+                    *completed,
+                    total_pages,
+                    *matched_count,
+                    scan_kind,
+                )
+                .await?
+            else {
+                return Ok(false);
+            };
+
+            self.append_scoped_page_result(
+                cate_id,
+                total_pages,
+                scan_kind,
+                &page_result,
+                all_comics,
+                matched_count,
+                completed,
+            );
+        }
+
+        Ok(true)
+    }
+
+    async fn collect_scoped_matches_parallel_fast(
+        &self,
+        cate_id: i64,
+        scan_kind: &str,
+        total_pages: i64,
+        first_page: SearchResult,
+        query: String,
+        is_tag: bool,
+        mut all_comics: Vec<ComicInSearch>,
+        mut matched_count: i64,
+        mut completed: i64,
+    ) -> anyhow::Result<Vec<ComicInSearch>> {
+        let outcome = self
+            .collect_scoped_matches_parallel_batch(
+                cate_id,
+                scan_kind,
+                total_pages,
+                &query,
+                is_tag,
+                2,
+                total_pages,
+                true,
+                &mut all_comics,
+                &mut matched_count,
+                &mut completed,
+            )
+            .await?;
+        if !outcome.completed {
+            self.emit_scoped_scan_cancelled(completed, total_pages, matched_count, scan_kind);
+            return Ok(all_comics);
+        }
+
+        self.append_scoped_page_result(
+            cate_id,
+            total_pages,
+            scan_kind,
+            &first_page,
+            &mut all_comics,
+            &mut matched_count,
+            &mut completed,
+        );
+
+        Ok(all_comics)
+    }
+
+    async fn collect_scoped_matches_manual_aggressive(
+        &self,
+        cate_id: i64,
+        scan_kind: &str,
+        total_pages: i64,
+        first_page: SearchResult,
+        query: String,
+        is_tag: bool,
+    ) -> anyhow::Result<Vec<ComicInSearch>> {
+        const BATCH_MIN: i64 = 100;
+        const BATCH_MAX: i64 = 200;
+        let mut all_comics = Vec::new();
+        let mut matched_count = 0_i64;
+        let mut completed = 0_i64;
+        let mut page = total_pages;
+        let mut retry_pages: Vec<i64> = Vec::new();
+        let mut paused_reason: Option<&'static str> = None;
+        let mut pending_page_after_retries: Option<i64> = None;
+
+        while page >= 1 {
+            if self.is_scoped_scan_cancelled() {
+                self.emit_scoped_scan_cancelled(completed, total_pages, matched_count, scan_kind);
+                return Ok(all_comics);
+            }
+            if paused_reason.is_some()
+                && !self
+                    .wait_manual_scoped_scan_request(
+                        completed,
+                        total_pages,
+                        matched_count,
+                        scan_kind,
+                        paused_reason,
+                    )
+                    .await?
+            {
+                self.emit_scoped_scan_cancelled(completed, total_pages, matched_count, scan_kind);
+                return Ok(all_comics);
+            }
+            paused_reason = None;
+
+            let is_retry_batch = !retry_pages.is_empty();
+            let batch_size = if is_retry_batch {
+                retry_pages.len() as i64
+            } else {
+                Self::random_page_span(BATCH_MIN, BATCH_MAX, page ^ completed ^ total_pages)
+            };
+            let start_page = if is_retry_batch {
+                *retry_pages.iter().min().unwrap_or(&page)
+            } else {
+                1_i64.max(page - batch_size + 1)
+            };
+            let end_page = if is_retry_batch {
+                *retry_pages.iter().max().unwrap_or(&page)
+            } else {
+                page
+            };
+            let mut pages_to_scan = if is_retry_batch {
+                let mut pages = retry_pages.clone();
+                retry_pages.clear();
+                pages.sort_unstable_by(|left, right| right.cmp(left));
+                pages
+            } else {
+                pending_page_after_retries = Some(start_page - 1);
+                (start_page.max(2)..=end_page).rev().collect::<Vec<_>>()
+            };
+
+            while !pages_to_scan.is_empty() {
+                let take = pages_to_scan.len();
+                let segment = pages_to_scan.drain(0..take).collect::<Vec<_>>();
+                let Some(segment_start) = segment.iter().min().copied() else {
+                    continue;
+                };
+                let Some(segment_end) = segment.iter().max().copied() else {
+                    continue;
+                };
+                let outcome = self
+                    .collect_scoped_matches_parallel_batch(
+                        cate_id,
+                        scan_kind,
+                        total_pages,
+                        &query,
+                        is_tag,
+                        segment_start,
+                        segment_end,
+                        false,
+                        &mut all_comics,
+                        &mut matched_count,
+                        &mut completed,
+                    )
+                    .await?;
+                let challenge_detected = outcome
+                    .page_failures
+                    .iter()
+                    .any(|failure| failure.category == "被拒絕");
+                retry_pages.extend(outcome.page_failures.iter().map(|failure| failure.page));
+                if self.is_scoped_scan_cancelled() {
+                    self.emit_scoped_scan_cancelled(
+                        completed,
+                        total_pages,
+                        matched_count,
+                        scan_kind,
+                    );
+                    return Ok(all_comics);
+                }
+                if challenge_detected {
+                    retry_pages.extend(pages_to_scan.drain(..));
+                    retry_pages.sort_unstable_by(|left, right| right.cmp(left));
+                    retry_pages.dedup();
+                    paused_reason = Some("已被 Cloudflare 挑戰，請換 IP 或等待");
+                    break;
+                }
+            }
+
+            if !retry_pages.is_empty() {
+                retry_pages.sort_unstable_by(|left, right| right.cmp(left));
+                retry_pages.dedup();
+                paused_reason.get_or_insert("部分頁面失敗，下一次送出只會補掃失敗頁");
+                continue;
+            }
+            if let Some(next_page) = pending_page_after_retries.take() {
+                page = next_page;
+            }
+            if start_page == 1 {
+                self.append_scoped_page_result(
+                    cate_id,
+                    total_pages,
+                    scan_kind,
+                    &first_page,
+                    &mut all_comics,
+                    &mut matched_count,
+                    &mut completed,
+                );
+            }
+        }
+
+        Ok(all_comics)
+    }
+
+    async fn collect_scoped_matches_randomized_large(
+        &self,
+        cate_id: i64,
+        scan_kind: &str,
+        total_pages: i64,
+        query: String,
+        is_tag: bool,
+        scan_mode: ScopedScanMode,
+        mut all_comics: Vec<ComicInSearch>,
+        mut matched_count: i64,
+        mut completed: i64,
+        first_page: SearchResult,
+    ) -> anyhow::Result<Vec<ComicInSearch>> {
+        let mut page = total_pages;
+        let mut round = 0_i64;
+        let mut use_parallel = Self::random_page_span(0, 1, total_pages) == 1;
+
+        while page >= 2 {
+            if self.is_scoped_scan_cancelled() {
+                self.emit_scoped_scan_cancelled(completed, total_pages, matched_count, scan_kind);
+                return Ok(all_comics);
+            }
+
+            let conservative_round = scan_mode == ScopedScanMode::Conservative;
+            let parallel_span = if conservative_round {
+                (30, 40)
+            } else {
+                (40, 50)
+            };
+            let paced_span = if conservative_round {
+                (10, 30)
+            } else {
+                (10, 15)
+            };
+            let span = if use_parallel {
+                Self::random_page_span(parallel_span.0, parallel_span.1, page ^ round ^ total_pages)
+            } else {
+                Self::random_page_span(
+                    paced_span.0,
+                    paced_span.1,
+                    page ^ round ^ total_pages ^ 0x55AA,
+                )
+            };
+            let start_page = 2_i64.max(page - span + 1);
+
+            let completed_ok = if use_parallel {
+                let outcome = self
+                    .collect_scoped_matches_parallel_batch(
+                        cate_id,
+                        scan_kind,
+                        total_pages,
+                        &query,
+                        is_tag,
+                        start_page,
+                        page,
+                        true,
+                        &mut all_comics,
+                        &mut matched_count,
+                        &mut completed,
+                    )
+                    .await?;
+                outcome.completed
+            } else {
+                self.collect_scoped_matches_paced_batch(
+                    cate_id,
+                    scan_kind,
+                    total_pages,
+                    &query,
+                    is_tag,
+                    start_page,
+                    page,
+                    &mut all_comics,
+                    &mut matched_count,
+                    &mut completed,
+                )
+                .await?
+            };
+
+            if !completed_ok {
+                self.emit_scoped_scan_cancelled(completed, total_pages, matched_count, scan_kind);
+                return Ok(all_comics);
+            }
+
+            page = start_page - 1;
+            round += 1;
+            use_parallel = !use_parallel;
+        }
+
+        self.append_scoped_page_result(
+            cate_id,
+            total_pages,
+            scan_kind,
+            &first_page,
+            &mut all_comics,
+            &mut matched_count,
+            &mut completed,
+        );
+
+        Ok(all_comics)
+    }
+
+    async fn collect_scoped_matches_paced(
         &self,
         cate_id: i64,
         scan_kind: &str,
         first_page: SearchResult,
         query: String,
         is_tag: bool,
+        scan_mode: ScopedScanMode,
     ) -> anyhow::Result<Vec<ComicInSearch>> {
-        const CONCURRENCY: usize = 100;
-        const BATCH_DELAY: Duration = Duration::from_millis(10000);
-
         self.begin_scoped_scan();
 
         let total_pages = first_page.total_page().max(1);
-        let mut all_matches = Self::filter_comics_by_cate(&first_page, cate_id);
-        let mut completed = 1_i64;
+        if scan_mode == ScopedScanMode::Aggressive {
+            return self
+                .collect_scoped_matches_manual_aggressive(
+                    cate_id,
+                    scan_kind,
+                    total_pages,
+                    first_page,
+                    query,
+                    is_tag,
+                )
+                .await;
+        }
+
+        let all_comics = Vec::new();
+        let matched_count = 0_i64;
+        let completed = 0_i64;
 
         self.emit_search_scan_progress(
             completed,
             total_pages,
-            all_matches.len() as i64,
+            matched_count,
             scan_kind,
-            total_pages <= 1,
             false,
+            false,
+            None,
             None,
             false,
         );
 
         if total_pages <= 1 {
-            return Ok(all_matches);
+            let mut all_comics = all_comics;
+            let mut matched_count = matched_count;
+            let mut completed = completed;
+            self.append_scoped_page_result(
+                cate_id,
+                total_pages,
+                scan_kind,
+                &first_page,
+                &mut all_comics,
+                &mut matched_count,
+                &mut completed,
+            );
+            return Ok(all_comics);
         }
 
-        let mut page = 2_i64;
-        while page <= total_pages {
-            if self.is_scoped_scan_cancelled() {
-                return Err(self.fail_scoped_scan_cancelled(
-                    completed,
-                    total_pages,
-                    all_matches.len() as i64,
+        if total_pages < 100 {
+            return self
+                .collect_scoped_matches_parallel_fast(
+                    cate_id,
                     scan_kind,
-                ));
-            }
-
-            if page > 2 {
-                if self.is_scoped_scan_cancelled() {
-                    return Err(self.fail_scoped_scan_cancelled(
-                        completed,
-                        total_pages,
-                        all_matches.len() as i64,
-                        scan_kind,
-                    ));
-                }
-                tokio::time::sleep(BATCH_DELAY).await;
-            }
-
-            let chunk_end = (page + CONCURRENCY as i64 - 1).min(total_pages);
-            let chunk_pages: Vec<i64> = (page..=chunk_end).collect();
-            let mut fetched: HashMap<i64, SearchResult> = HashMap::new();
-            let mut pending = chunk_pages.clone();
-            let mut attempt = 0_u32;
-
-            while !pending.is_empty() {
-                if self.is_scoped_scan_cancelled() {
-                    return Err(self.fail_scoped_scan_cancelled(
-                        completed,
-                        total_pages,
-                        all_matches.len() as i64,
-                        scan_kind,
-                    ));
-                }
-
-                attempt += 1;
-                if attempt > 1 {
-                    self.wait_scoped_scan_retry(
-                        completed,
-                        total_pages,
-                        all_matches.len() as i64,
-                        scan_kind,
-                    )
-                    .await?;
-                }
-
-                let mut failed = Vec::new();
-                for batch in pending.chunks(CONCURRENCY) {
-                    if self.is_scoped_scan_cancelled() {
-                        return Err(self.fail_scoped_scan_cancelled(
-                            completed,
-                            total_pages,
-                            all_matches.len() as i64,
-                            scan_kind,
-                        ));
-                    }
-
-                    let mut handles = Vec::with_capacity(batch.len());
-                    for &page_num in batch {
-                        let client = self.clone();
-                        let query = query.clone();
-                        handles.push((
-                            page_num,
-                            tokio::spawn(async move {
-                                if is_tag {
-                                    client.fetch_tag_page(&query, page_num).await
-                                } else {
-                                    client.fetch_keyword_search_page(&query, page_num).await
-                                }
-                            }),
-                        ));
-                    }
-
-                    for (page_num, handle) in handles {
-                        match handle.await {
-                            Ok(Ok(result)) => {
-                                fetched.insert(page_num, result);
-                            }
-                            Ok(Err(_)) | Err(_) => {
-                                failed.push(page_num);
-                            }
-                        }
-                    }
-                }
-
-                pending = failed;
-            }
-
-            for page_num in chunk_pages {
-                if let Some(page_result) = fetched.get(&page_num) {
-                    all_matches.extend(Self::filter_comics_by_cate(page_result, cate_id));
-                }
-                completed += 1;
-                self.emit_search_scan_progress(
-                    completed,
                     total_pages,
-                    all_matches.len() as i64,
-                    scan_kind,
-                    completed >= total_pages,
-                    false,
-                    None,
-                    false,
-                );
-            }
-
-            page = chunk_end + 1;
+                    first_page,
+                    query,
+                    is_tag,
+                    all_comics,
+                    matched_count,
+                    completed,
+                )
+                .await;
         }
 
-        Ok(all_matches)
+        self.collect_scoped_matches_randomized_large(
+            cate_id,
+            scan_kind,
+            total_pages,
+            query,
+            is_tag,
+            scan_mode,
+            all_comics,
+            matched_count,
+            completed,
+            first_page,
+        )
+        .await
     }
 
     async fn get_or_build_scoped_cache<F, Fut>(
@@ -579,13 +1232,17 @@ impl WnacgClient {
         }
 
         let comics = build().await?;
+        self.store_scoped_cache(cache_key, &comics);
+        Ok(comics)
+    }
+
+    fn store_scoped_cache(&self, cache_key: &str, comics: &[ComicInSearch]) {
         *self.scoped_search_cache.write() = Some((
             cache_key.to_string(),
             ScopedSearchCacheEntry {
-                comics: comics.clone(),
+                comics: comics.to_vec(),
             },
         ));
-        Ok(comics)
     }
 
     pub async fn browse_by_category(
@@ -641,9 +1298,7 @@ impl WnacgClient {
         let url = if page_num <= 1 {
             format!("https://{api_domain}/albums-index-cate-{cate_id}.html")
         } else {
-            format!(
-                "https://{api_domain}/albums-index-page-{page_num}-cate-{cate_id}.html"
-            )
+            format!("https://{api_domain}/albums-index-page-{page_num}-cate-{cate_id}.html")
         };
         let request = self
             .api_client
@@ -871,17 +1526,11 @@ impl WnacgClient {
         mut on_progress: impl FnMut() + Send,
     ) -> anyhow::Result<()> {
         if let Some(parent) = save_path.parent() {
-            std::fs::create_dir_all(parent).context(format!(
-                "創建目錄`{}`失敗",
-                parent.display()
-            ))?;
+            std::fs::create_dir_all(parent)
+                .context(format!("創建目錄`{}`失敗", parent.display()))?;
         }
 
-        let request = self
-            .img_client
-            .read()
-            .get(url)
-            .header("referer", referer);
+        let request = self.img_client.read().get(url).header("referer", referer);
         let http_resp = request.send().await?;
         let status = http_resp.status();
         if status != StatusCode::OK {
@@ -899,11 +1548,7 @@ impl WnacgClient {
             .context(format!("創建檔案`{}`失敗", save_path.display()))?;
         let mut response = http_resp;
         let mut last_progress_emit = std::time::Instant::now();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .context("讀取 zip 下載數據失敗")?
-        {
+        while let Some(chunk) = response.chunk().await.context("讀取 zip 下載數據失敗")? {
             tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
                 .await
                 .context(format!("寫入檔案`{}`失敗", save_path.display()))?;

@@ -1,4 +1,4 @@
-import { defineComponent, type PropType } from 'vue'
+import { defineComponent, type PropType, type VNodeChild } from 'vue'
 import FavoriteComicsPane from './FavoriteComicsPane.tsx'
 import FavoriteTabsPane from './FavoriteTabsPane.tsx'
 import type { SearchTabBookmark } from './searchTabBookmarkTypes.ts'
@@ -19,11 +19,17 @@ export default defineComponent({
       type: Function as PropType<(bookmark: SearchTabBookmark) => void>,
       required: true,
     },
+    renderScanCaches: {
+      type: Function as PropType<() => VNodeChild>,
+      required: true,
+    },
   },
   setup(props) {
     return () => (
       <div class="h-full flex flex-col min-h-0">
-        {props.section === 'comics' ? (
+        {props.section === 'scanCaches' ? (
+          props.renderScanCaches()
+        ) : props.section === 'comics' ? (
           <FavoriteComicsPane searchByTag={props.searchByTag} />
         ) : (
           <FavoriteTabsPane onOpenBookmark={props.onOpenBookmarkedTab} />

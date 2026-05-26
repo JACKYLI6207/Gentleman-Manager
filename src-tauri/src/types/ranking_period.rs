@@ -59,7 +59,10 @@ mod tests {
 
     #[test]
     fn ranking_period_parse_str_accepts_frontend_values() {
-        assert_eq!(RankingPeriod::parse_str("Week").unwrap(), RankingPeriod::Week);
+        assert_eq!(
+            RankingPeriod::parse_str("Week").unwrap(),
+            RankingPeriod::Week
+        );
     }
 
     #[test]

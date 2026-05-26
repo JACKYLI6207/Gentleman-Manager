@@ -32,8 +32,8 @@ description: >-
 
 - 等同 `pnpm tauri:build:fast`（Release-fast、不打包 NSIS）
 - Cargo 原始 EXE：`src-tauri\target\release-fast\Gentleman-Manager.exe`
-- 根目錄 EXE：`Gentleman-Manager.exe`
-- 根目錄 ZIP：`Gentleman-Manager.zip`
+- 根目錄 EXE：`Gentleman-Manager-v1.2.exe`
+- 根目錄 ZIP：`Gentleman-Manager-v1.2.zip`
 - 建置失敗時**不得**視為任務完成；先修錯誤再建置，或回報使用者
 
 僅改 `skill/backups/`、純文件且未動到 `src/` / `src-tauri/` 時可略過建置；其餘修改（含 UI、Rust、設定）**都要**建置。
@@ -57,7 +57,7 @@ description: >-
 
 ```powershell
 .\skill\scripts\rebuild-exe.ps1
-# 產出：Gentleman-Manager.exe + Gentleman-Manager.zip（專案根目錄）
+# 產出：Gentleman-Manager-v1.2.exe + Gentleman-Manager-v1.2.zip（專案根目錄）
 ```
 
 ## 備份位置
@@ -113,8 +113,8 @@ skill/backups/<專案相對路徑>
 - [ ] 每個檔案都已執行 backup-before-edit.ps1
 - [ ] 備份成功後才寫入
 - [ ] 修改完成後已執行 rebuild-exe.ps1
-- [ ] 建置成功且 `Gentleman-Manager.exe`、`Gentleman-Manager.zip` 路徑已確認
-- [ ] 若使用者要求 Release，已 push 最新 commit 並上傳 `Gentleman-Manager.zip`
+- [ ] 建置成功且 `Gentleman-Manager-v1.2.exe`、`Gentleman-Manager-v1.2.zip` 路徑已確認
+- [ ] 若使用者要求 Release，已 push 最新 commit 並上傳 `Gentleman-Manager-v1.2.zip`
 - [ ] 若使用者要求還原，使用 restore-from-backup.ps1
 - [ ] 本次修改未超出使用者明確要求的範圍
 ```
@@ -174,16 +174,16 @@ git status --short --branch
 git add -A
 git commit -m "簡短描述"
 git push
-gh release create v<版本號> .\Gentleman-Manager.zip --repo JACKYLI6207/Gentleman-Manager --title "Gentleman Manager v<版本號>" --notes "發佈說明"
+gh release create v<版本號> .\Gentleman-Manager-v<版本號>.zip --repo JACKYLI6207/Gentleman-Manager --title "Gentleman Manager v<版本號>" --notes "發佈說明"
 ```
 
 若 Release 已存在，改用：
 
 ```powershell
-gh release upload v<版本號> .\Gentleman-Manager.zip --repo JACKYLI6207/Gentleman-Manager --clobber
+gh release upload v<版本號> .\Gentleman-Manager-v<版本號>.zip --repo JACKYLI6207/Gentleman-Manager --clobber
 ```
 
-- ZIP 應只包含 `Gentleman-Manager.exe`。
+- ZIP 應只包含同版本 `Gentleman-Manager-v<版本號>.exe`。
 - `*.exe`、`*.zip` 是本機產物，維持在 `.gitignore`，不要提交到 Git。
 
 ## 範例

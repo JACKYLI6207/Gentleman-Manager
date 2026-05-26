@@ -56,8 +56,7 @@ export function listCategorySearchScopes(): { label: string; cateId: number }[] 
       if (item.browse !== undefined) {
         continue
       }
-      const label =
-        parentLabel !== undefined ? `${parentLabel} / ${item.label}` : item.label
+      const label = parentLabel !== undefined ? `${parentLabel} / ${item.label}` : item.label
       if (item.cateId !== undefined) {
         out.push({ label, cateId: item.cateId })
       }
@@ -72,6 +71,7 @@ export function listCategorySearchScopes(): { label: string; cateId: number }[] 
 }
 
 export const SITE_CATEGORIES: SiteCategoryItem[] = [
+  { label: '首頁', browse: 'home' },
   { label: '更新', browse: 'albums' },
   {
     label: '同人誌',

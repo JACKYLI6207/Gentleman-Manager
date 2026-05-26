@@ -22,7 +22,11 @@ mod ranking_fetch_tests {
             .expect("request failed");
         let status = resp.status();
         let body = resp.text().await.expect("read body");
-        assert!(status.is_success(), "status={status}, body_prefix={}", &body[..body.len().min(200)]);
+        assert!(
+            status.is_success(),
+            "status={status}, body_prefix={}",
+            &body[..body.len().min(200)]
+        );
 
         let document = Html::parse_document(&body);
         let li_count = document
@@ -48,6 +52,9 @@ mod ranking_fetch_tests {
             li_count > 0 || gallary_count > 0,
             "no gallery items found in ranking html"
         );
-        assert!(total_count > 0, "ranking total_count should parse (got {total_count})");
+        assert!(
+            total_count > 0,
+            "ranking total_count should parse (got {total_count})"
+        );
     }
 }

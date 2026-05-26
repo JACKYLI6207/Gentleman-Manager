@@ -6,7 +6,13 @@ use specta::Type;
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub enum DownloadFormat {
     /// 逐張下載 JPEG 後打包為 ZIP，檔名為漫畫網頁標題
-    #[serde(rename = "JpegZipPack", alias = "Jpeg", alias = "Png", alias = "Webp", alias = "Original")]
+    #[serde(
+        rename = "JpegZipPack",
+        alias = "Jpeg",
+        alias = "Png",
+        alias = "Webp",
+        alias = "Original"
+    )]
     JpegZipPack,
     /// 官網 Server 2 直鏈整包 ZIP
     #[serde(rename = "Server2Zip", alias = "Zip")]

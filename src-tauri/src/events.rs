@@ -73,6 +73,7 @@ pub struct SearchScanProgressEvent {
     pub finished: bool,
     pub paused: bool,
     pub retry_in_secs: Option<i64>,
+    pub paused_reason: Option<String>,
     pub cancelled: bool,
 }
 

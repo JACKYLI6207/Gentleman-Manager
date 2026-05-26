@@ -112,10 +112,7 @@ export default defineComponent({
                           <button
                             key={child.label}
                             type="button"
-                            class={[
-                              styles.dropdownItem,
-                              isItemActive(child, item.label) && styles.dropdownItemActive,
-                            ]}
+                            class={[styles.dropdownItem, isItemActive(child, item.label) && styles.dropdownItemActive]}
                             onClick={() => selectItem(child, item.label)}>
                             {child.label}
                           </button>

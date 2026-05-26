@@ -41,6 +41,7 @@ pub fn run() {
             search_by_keyword,
             search_by_tag,
             cancel_scoped_search_scan,
+            advance_scoped_search_scan,
             browse_by_category,
             browse_ranking,
             browse_albums_list,
@@ -60,6 +61,12 @@ pub fn run() {
             get_downloaded_comics,
             get_logs_dir_size,
             show_path_in_file_manager,
+            show_snapshot_data_file,
+            write_snapshot_export_file,
+            read_snapshot_export_file,
+            write_snapshot_repair_file,
+            write_snapshot_root_file,
+            write_snapshot_website_file,
             get_cover_data,
             get_reader_image,
             list_local_reader_sources,
@@ -94,8 +101,7 @@ pub fn run() {
         .setup(move |app| {
             builder.mount_events(app);
 
-            let app_data_dir = crate::utils::app_data_dir()
-                .context("獲取app_data_dir目錄失敗")?;
+            let app_data_dir = crate::utils::app_data_dir().context("獲取app_data_dir目錄失敗")?;
 
             std::fs::create_dir_all(&app_data_dir).context(format!(
                 "創建app_data_dir目錄`{}`失敗",

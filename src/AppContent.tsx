@@ -2,14 +2,14 @@ import { defineComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useStore } from './store.ts'
 import { commands, events } from './bindings.ts'
-import { useMessage, NButton, NTabs, NTabPane, NIcon } from 'naive-ui'
+import { useMessage, NTabs, NTabPane, NIcon } from 'naive-ui'
 import SearchPane from './panes/SearchPane.tsx'
 import FavoritesPane from './panes/FavoritesPane.tsx'
 import ComicPane from './panes/ComicPane.tsx'
 import ComicReadPane from './panes/ComicReadPane.tsx'
 import LocalReadPane from './panes/LocalReadPane.tsx'
 import { CurrentTabName } from './types.ts'
-import { PhGearSix, PhSidebarSimple } from '@phosphor-icons/vue'
+import { PhSidebarSimple } from '@phosphor-icons/vue'
 import SettingsDialog from './dialogs/SettingsDialog.tsx'
 import DownloadBatchEnqueueOverlay from './components/DownloadBatchEnqueueOverlay.tsx'
 import ProgressPane from './panes/ProgressPane/ProgressPane.tsx'
@@ -182,10 +182,7 @@ export default defineComponent({
           comic.isDownloaded = true
         }
         applyCompletedSideEffects(state, comic.id, store)
-        store.setProgress(
-          comic.id,
-          buildProgressData(downloadTaskEvent, progressOptionsFromConfig(store.config)),
-        )
+        store.setProgress(comic.id, buildProgressData(downloadTaskEvent, progressOptionsFromConfig(store.config)))
       })
     })
 
@@ -225,10 +222,21 @@ export default defineComponent({
               <NTabs
                 class="flex-1 min-h-0 w-full"
                 value={store.currentTabName}
-                onUpdate:value={(value) => (store.currentTabName = value as CurrentTabName)}
+                onUpdate:value={(value) => {
+                  if (value === 'globalSnapshot') {
+                    return
+                  }
+                  store.currentTabName = value as CurrentTabName
+                }}
                 type="line"
                 size="small"
                 animated>
+                <NTabPane class="h-full overflow-auto p-0!" name="globalSnapshot" display-directive="show">
+                  {{
+                    tab: () => searchPane.value?.renderGlobalSnapshotTabControls?.() ?? <span>全站快照</span>,
+                    default: () => null,
+                  }}
+                </NTabPane>
                 <NTabPane class="h-full overflow-auto p-0!" name="search" tab="漫畫搜索" display-directive="show">
                   <SearchPane ref={searchPane} />
                 </NTabPane>
@@ -244,8 +252,7 @@ export default defineComponent({
                         onSelectSection={(section) => store.openRead(section)}
                       />
                     ),
-                    default: () =>
-                      readSection.value === 'online' ? <ComicReadPane /> : <LocalReadPane />,
+                    default: () => (readSection.value === 'online' ? <ComicReadPane /> : <LocalReadPane />),
                   }}
                 </NTabPane>
                 <NTabPane class="h-full overflow-auto p-0!" name="favorites" display-directive="show">
@@ -268,6 +275,7 @@ export default defineComponent({
                           store.currentTabName = 'search'
                           searchPane.value?.openBookmarkedSearchTab(bookmark)
                         }}
+                        renderScanCaches={() => searchPane.value?.renderScopedScanCachesPane() ?? null}
                       />
                     ),
                   }}
@@ -285,43 +293,24 @@ export default defineComponent({
             {rightPaneCollapsed.value ? (
               <div class={styles.collapsedRightPane}>
                 <div class={styles.collapsedRightHeader}>
-                  <button
-                    type="button"
-                    class={styles.expandRightTab}
-                    title="展開下載列表"
-                    onClick={toggleRightPane}>
+                  <button type="button" class={styles.expandRightTab} title="展開下載列表" onClick={toggleRightPane}>
                     {renderRightPaneToggleIcon()}
                   </button>
                 </div>
               </div>
             ) : (
               <div class={`${styles.splitPane} flex flex-col flex-1 min-h-0 overflow-hidden`}>
-              <div class="flex min-h-8.5 gap-col-1 mx-2 items-center border-solid border-0 border-b box-border border-[var(--n-divider-color)]">
-                <div class="text-xl font-bold box-border">下載列表</div>
-                <NButton class="ml-auto" size="small" onClick={() => (settingsDialogShowing.value = true)}>
-                  {{
-                    icon: () => (
-                      <NIcon size={20}>
-                        <PhGearSix />
-                      </NIcon>
-                    ),
-                    default: () => <div>設定</div>,
-                  }}
-                </NButton>
-                <NButton size="small" title="隱藏下載列表" onClick={toggleRightPane}>
-                  {{
-                    icon: () => renderRightPaneToggleIcon(),
-                  }}
-                </NButton>
-              </div>
-              <ProgressPane />
+                <ProgressPane
+                  onOpenSettings={() => (settingsDialogShowing.value = true)}
+                  onToggleRightPane={toggleRightPane}
+                />
               </div>
             )}
           </div>
-            <SettingsDialog
-              showing={settingsDialogShowing.value}
-              onUpdate:showing={(showing) => (settingsDialogShowing.value = showing)}
-            />
+          <SettingsDialog
+            showing={settingsDialogShowing.value}
+            onUpdate:showing={(showing) => (settingsDialogShowing.value = showing)}
+          />
         </div>
       )
   },

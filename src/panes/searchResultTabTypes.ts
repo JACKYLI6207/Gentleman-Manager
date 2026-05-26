@@ -1,6 +1,6 @@
 import type { ComicInSearch, SearchResult } from '../bindings.ts'
 import type { RankingPeriod } from '../categories.ts'
-import type { SearchSortOrder } from '../utils.ts'
+import { DEFAULT_SEARCH_SORT_ORDER, type SearchSortOrder } from '../utils.ts'
 import { getTagLabelFromSearch } from '../koreanWebtoon.ts'
 import { RANKING_PERIOD_OPTIONS } from '../categories.ts'
 
@@ -118,7 +118,7 @@ export function createEmptySearchResultTab(title: string, searchSession: number)
     sortedComics: [],
     visibleComics: [],
     pageCacheEntries: [],
-    sortOrder: 'createDateDesc',
+    sortOrder: DEFAULT_SEARCH_SORT_ORDER,
     catalogAnalysisEntries: [],
     totalServerPagesHint: 1,
     totalCountHint: 0,
