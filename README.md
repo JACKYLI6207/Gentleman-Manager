@@ -108,4 +108,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\sync-to-gentleman-manager.ps1
 
 授權條款見 [LICENSE](./LICENSE)。
 
+本專案基於 MIT 授權之原始專案修改與延伸，保留原作者 lanyeeee（https://github.com/lanyeeee）之著作權聲明。
+
 本工具僅供學習、研究與個人管理用途。使用者需自行承擔使用本工具造成的風險與責任，作者不對任何損失、法律糾紛或第三方權益問題負責。
