@@ -71,17 +71,10 @@ pnpm tauri dev
 Windows 快速建置 EXE：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\skill\scripts\rebuild-exe.ps1
+pnpm tauri:build:fast
 ```
 
-建置完成後，根目錄會產生可直接發佈的 EXE 與 ZIP：
-
-```text
-Gentleman-Manager-v1.2.exe
-Gentleman-Manager-v1.2.zip
-```
-
-Cargo 原始建置產物位於 `src-tauri\target\release-fast\Gentleman-Manager.exe`，腳本會複製到根目錄並壓縮成 ZIP，方便上傳到 GitHub Releases。
+建置產物位於 `src-tauri\target\release-fast\Gentleman-Manager.exe`。若要發佈到 GitHub Releases，請自行複製並打包為 `Gentleman-Manager-v1.2.exe` / `.zip`（此類產物不納入 Git）。
 
 ## 倉庫內容說明
 
@@ -92,7 +85,7 @@ Cargo 原始建置產物位於 `src-tauri\target\release-fast\Gentleman-Manager.
 - `src-tauri/target/`
 - `*.exe`
 - `*.zip`
-- `skill/backups/`
+- `.cursor/`、`skill/`（本機 Cursor 與開發輔助，僅本地使用）
 - `Website Snapshot/`
 - `repair/`
 - 真實站點快照、下載成品、匯出資料與其他本機產物

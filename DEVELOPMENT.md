@@ -26,16 +26,12 @@ pnpm tauri dev
 ## 建置可執行檔（Windows）
 
 ```powershell
-# 快速 Release（與專案內 skill 腳本一致）
-powershell -ExecutionPolicy Bypass -File .\skill\scripts\rebuild-exe.ps1
+pnpm tauri:build:fast
 ```
 
-產物預設在 `src-tauri\target\release-fast\Gentleman-Manager.exe`。腳本會另外在專案根目錄產生：
+產物位於 `src-tauri\target\release-fast\Gentleman-Manager.exe`。根目錄的 `Gentleman-Manager-v1.2.exe` / `.zip` 為本機發佈用產物，不納入 Git。
 
-- `Gentleman-Manager-v1.2.exe`
-- `Gentleman-Manager-v1.2.zip`
-
-圖示：根目錄放置 `logo.ico` 後執行上述腳本；若無則從既有 EXE 抽取。
+圖示：可將 `logo.ico` 放在專案根目錄後建置；詳見本機 `skill/` 內輔助腳本（該目錄不推送 GitHub）。
 
 ## 倉庫體積說明
 
@@ -44,7 +40,7 @@ powershell -ExecutionPolicy Bypass -File .\skill\scripts\rebuild-exe.ps1
 | `node_modules/` | `pnpm install` |
 | `src-tauri/target/` | 建置時自動產生 |
 | `dist/` | `pnpm build` / `pnpm tauri build` |
-| `skill/backups/` | 本機編輯前快照，見 `skill/SKILL.md` |
+| `.cursor/`、`skill/` | 本機 Cursor 規則與開發輔助，不推送 GitHub |
 
 ## 從完整本機工作區同步
 

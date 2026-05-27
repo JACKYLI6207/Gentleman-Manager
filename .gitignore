@@ -29,9 +29,9 @@ icon-extracted.ico
 Website Snapshot/
 repair/
 
-# Pre-edit backups (local only; see skill/SKILL.md)
-skill/backups/**
-!skill/backups/.gitkeep
+# Local Cursor / dev tooling (do not push to GitHub)
+.cursor/
+skill/
 
 # Editor & OS
 .vscode/*
