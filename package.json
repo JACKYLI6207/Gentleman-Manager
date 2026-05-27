@@ -9,8 +9,8 @@
     "build:fe:fast": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:build:fast": "tauri build --config src-tauri/tauri.fast.conf.json -- --profile release-fast",
-    "tauri:build:release": "tauri build --config src-tauri/tauri.fast.conf.json -- --profile release"
+    "tauri:build:fast": "powershell -NoProfile -ExecutionPolicy Bypass -File skill/scripts/build-pc-tauri.ps1",
+    "tauri:build:release": "tauri build --config src-tauri/tauri.fast.conf.json"
   },
   "dependencies": {
     "@phosphor-icons/vue": "^2.2.1",

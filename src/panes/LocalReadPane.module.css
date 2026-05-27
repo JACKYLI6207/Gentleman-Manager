@@ -1,0 +1,38 @@
+.sourceBtn {
+  justify-content: flex-start !important;
+  height: auto !important;
+  min-height: 40px;
+  padding: 8px 12px !important;
+}
+
+.sourceBtnInner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+}
+
+.sourceTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.openedDot {
+  color: #3d6ef5;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.sourceKind {
+  opacity: 0.6;
+  font-size: 12px;
+}
+
+.sourceProgress {
+  font-size: 12px;
+  color: var(--n-text-color-3);
+}

@@ -15,14 +15,25 @@ import {
   LocalReaderSource,
 } from '../bindings.ts'
 import { useReaderFullscreen } from '../composables/useReaderFullscreen.ts'
+import {
+  cancelFolderListMode,
+  formatSourceProgressLabel,
+  getSourceRecord,
+  loadFolderSourceProgress,
+  markSourceOpened,
+  saveSourceReadPosition,
+  setCurrentFolderPath,
+  type SourceReadRecord,
+} from '../localReadStore.ts'
+import { computeVisiblePageIndex, getPageTopInScroller } from '../readerProgressMath.ts'
 import { NButton, NEmpty, useMessage } from 'naive-ui'
 import styles from './ComicReadPane.module.css'
+import localStyles from './LocalReadPane.module.css'
 
 const PREFETCH_ROOT_MARGIN = '600px 0px'
 const FOLDER_MAX_CONCURRENT_LOADS = 4
 const ZIP_MAX_CONCURRENT_LOADS = 2
 const NEIGHBOR_PRELOAD_RADIUS = 3
-
 function isZipPath(path: string): boolean {
   const lower = path.toLowerCase()
   return lower.endsWith('.zip') || lower.endsWith('.cbz')
@@ -71,6 +82,7 @@ export default defineComponent({
     const pickingSource = ref(false)
     const sourceListMode = ref(false)
     const folderLabel = ref('')
+    const currentFolderPath = ref('')
     const folderSources = ref<LocalReaderSource[]>([])
     const currentSourceIndex = ref(-1)
     const currentSourcePath = ref('')
@@ -79,10 +91,14 @@ export default defineComponent({
     const failedIndices = ref<Set<number>>(new Set())
     const pageRefs = ref<Map<number, HTMLElement>>(new Map())
     const scrollContainerRef = ref<HTMLElement | null>(null)
+    const restoringScroll = ref(false)
     const readerSessionId = ref(0)
     let observer: IntersectionObserver | undefined
     let loadQueue: number[] = []
     let activeLoads = 0
+    let scrollSaveTimer: ReturnType<typeof setTimeout> | undefined
+    let restoreScrollTimer: ReturnType<typeof setInterval> | undefined
+    let restoreTarget: Pick<SourceReadRecord, 'readPage' | 'scrollY' | 'offsetInPage'> | null = null
 
     const canNavigateBooks = computed(
       () => sourceListMode.value && folderSources.value.length > 1 && readingActive.value,
@@ -107,6 +123,7 @@ export default defineComponent({
     }
 
     function clearReaderContent() {
+      restoreTarget = null
       readerSessionId.value += 1
       revokeAllBlobUrls()
       loadingIndices.value = new Set()
@@ -120,7 +137,105 @@ export default defineComponent({
       activeLoads = 0
     }
 
+    function stopRestoreScrollTimer() {
+      if (restoreScrollTimer !== undefined) {
+        clearInterval(restoreScrollTimer)
+        restoreScrollTimer = undefined
+      }
+    }
+
+    function stopScrollSaveTimer() {
+      if (scrollSaveTimer !== undefined) {
+        clearTimeout(scrollSaveTimer)
+        scrollSaveTimer = undefined
+      }
+    }
+
+    function saveReadingPosition() {
+      if (!readingActive.value || !currentSourcePath.value) return
+      const root = scrollContainerRef.value
+      const total = readerPages.value.length
+      if (!root || total <= 0) return
+      const pageIndex = computeVisiblePageIndex(root)
+      const pageTop = getPageTopInScroller(root, pageIndex)
+      const offsetInPage = Math.max(0, root.scrollTop - pageTop)
+      saveSourceReadPosition(
+        currentSourcePath.value,
+        pageIndex,
+        total,
+        root.scrollTop,
+        offsetInPage,
+      )
+    }
+
+    function pagesReadyForRestore(pageIndex: number): boolean {
+      for (let i = 0; i <= pageIndex; i++) {
+        if (!pageSrcMap.value.has(i)) return false
+      }
+      return true
+    }
+
+    function preloadPagesForRestore(pageIndex: number) {
+      for (let i = 0; i <= pageIndex; i++) {
+        enqueuePage(i)
+      }
+      enqueueNeighbors(pageIndex)
+    }
+
+    function applySavedScrollPosition(
+      rec: Pick<SourceReadRecord, 'readPage' | 'scrollY' | 'offsetInPage'>,
+    ) {
+      const root = scrollContainerRef.value
+      const total = readerPages.value.length
+      if (!root || total <= 0) return
+
+      const pageIndex = Math.min(Math.max(0, rec.readPage), total - 1)
+      if (!pagesReadyForRestore(pageIndex)) return
+
+      const pageTop = getPageTopInScroller(root, pageIndex)
+      const offset = Math.max(0, rec.offsetInPage)
+      if (offset > 0) {
+        root.scrollTop = pageTop + offset
+        return
+      }
+      const targetY = Math.max(0, rec.scrollY)
+      if (targetY > 0) {
+        root.scrollTop = targetY
+      } else {
+        root.scrollTop = pageTop
+      }
+    }
+
+    function onReaderScroll() {
+      if (!readingActive.value || restoringScroll.value) return
+      stopScrollSaveTimer()
+      scrollSaveTimer = setTimeout(() => saveReadingPosition(), 500)
+    }
+
+    function cancelFromFolderList() {
+      stopScrollSaveTimer()
+      stopRestoreScrollTimer()
+      restoreTarget = null
+      clearReaderContent()
+      cancelFolderListMode()
+      pickingSource.value = false
+      sourceListMode.value = false
+      readingActive.value = false
+      readerPages.value = []
+      readerTitle.value = ''
+      folderLabel.value = ''
+      folderSources.value = []
+      currentFolderPath.value = ''
+      currentSourceIndex.value = -1
+      currentSourcePath.value = ''
+      exitFullscreen()
+      scrollContainerRef.value?.scrollTo({ top: 0 })
+    }
+
     function resetAll() {
+      stopScrollSaveTimer()
+      stopRestoreScrollTimer()
+      restoreTarget = null
       clearReaderContent()
       readingActive.value = false
       readerPages.value = []
@@ -129,6 +244,7 @@ export default defineComponent({
       sourceListMode.value = false
       folderLabel.value = ''
       folderSources.value = []
+      currentFolderPath.value = ''
       currentSourceIndex.value = -1
       currentSourcePath.value = ''
       exitFullscreen()
@@ -136,6 +252,10 @@ export default defineComponent({
     }
 
     function closeReading() {
+      saveReadingPosition()
+      restoreTarget = null
+      stopScrollSaveTimer()
+      stopRestoreScrollTimer()
       clearReaderContent()
       readingActive.value = false
       readerPages.value = []
@@ -192,15 +312,69 @@ export default defineComponent({
       }
     }
 
+    async function restoreReadingPosition() {
+      stopRestoreScrollTimer()
+      const rec = currentSourcePath.value ? getSourceRecord(currentSourcePath.value) : null
+      if (!rec?.opened || readerPages.value.length === 0) {
+        restoreTarget = null
+        primeInitialPages()
+        return
+      }
+
+      const pageIndex = Math.min(Math.max(0, rec.readPage), readerPages.value.length - 1)
+      restoreTarget = {
+        readPage: pageIndex,
+        scrollY: Math.max(0, rec.scrollY),
+        offsetInPage: Math.max(0, rec.offsetInPage),
+      }
+
+      preloadPagesForRestore(pageIndex)
+
+      restoringScroll.value = true
+      const sessionAtStart = readerSessionId.value
+      const target = restoreTarget
+
+      const tryRestore = () => {
+        if (sessionAtStart !== readerSessionId.value || !readingActive.value || !target) return
+        applySavedScrollPosition(target)
+      }
+
+      const finishRestore = () => {
+        stopRestoreScrollTimer()
+        restoringScroll.value = false
+        restoreTarget = null
+      }
+
+      await nextTick()
+      tryRestore()
+
+      let attempts = 0
+      restoreScrollTimer = setInterval(() => {
+        attempts += 1
+        if (sessionAtStart !== readerSessionId.value || !readingActive.value) {
+          finishRestore()
+          return
+        }
+        if (!pagesReadyForRestore(pageIndex)) {
+          if (attempts >= 120) finishRestore()
+          return
+        }
+        tryRestore()
+        if (attempts >= 8) {
+          finishRestore()
+        }
+      }, 200)
+    }
+
     async function activateReader() {
       if (!readingActive.value || readerPages.value.length === 0) {
         return
       }
       await nextTick()
-      scrollContainerRef.value?.scrollTo({ top: 0 })
+      await nextTick()
       setupObserver()
       observeAllPages()
-      primeInitialPages()
+      await restoreReadingPosition()
     }
 
     async function startReading(pages: LocalReaderPages) {
@@ -209,6 +383,9 @@ export default defineComponent({
       readerPages.value = pages.pages
       pickingSource.value = false
       readingActive.value = true
+      if (currentSourcePath.value) {
+        markSourceOpened(currentSourcePath.value, pages.pages.length)
+      }
       await activateReader()
     }
 
@@ -282,6 +459,9 @@ export default defineComponent({
       readingActive.value = false
       readerPages.value = []
       sourceListMode.value = true
+      currentFolderPath.value = selected
+      setCurrentFolderPath(selected)
+      loadFolderSourceProgress(selected)
       folderLabel.value = selected.split(/[/\\]/).pop() ?? selected
       readerTitle.value = folderLabel.value
       pickingSource.value = true
@@ -291,6 +471,7 @@ export default defineComponent({
     }
 
     async function goToAdjacentSource(delta: number) {
+      saveReadingPosition()
       const nextIndex = currentSourceIndex.value + delta
       const source = folderSources.value[nextIndex]
       if (source === undefined) {
@@ -377,6 +558,15 @@ export default defineComponent({
       const nextMap = new Map(pageSrcMap.value)
       nextMap.set(index, src)
       pageSrcMap.value = nextMap
+      if (
+        restoringScroll.value &&
+        restoreTarget &&
+        index <= restoreTarget.readPage &&
+        pagesReadyForRestore(restoreTarget.readPage)
+      ) {
+        await nextTick()
+        applySavedScrollPosition(restoreTarget)
+      }
       pumpLoadQueue()
     }
 
@@ -422,7 +612,10 @@ export default defineComponent({
     function renderReaderBody() {
       const pages = readerPages.value
       return (
-        <div ref={scrollContainerRef} class="flex-1 min-h-0 overflow-auto">
+        <div
+          ref={scrollContainerRef}
+          class="flex-1 min-h-0 overflow-auto"
+          onScroll={onReaderScroll}>
           <div key={readerSessionId.value}>
             {pages.map((page, index) => {
               const src = pageSrcMap.value.get(index)
@@ -434,7 +627,21 @@ export default defineComponent({
                   data-index={index}
                   class={styles.readerPage}>
                   {src !== undefined ? (
-                    <img class="w-full block" src={src} alt={page.caption} />
+                    <img
+                      class="w-full block"
+                      src={src}
+                      alt={page.caption}
+                      onLoad={() => {
+                        if (
+                          !restoringScroll.value ||
+                          !restoreTarget ||
+                          !pagesReadyForRestore(restoreTarget.readPage)
+                        ) {
+                          return
+                        }
+                        applySavedScrollPosition(restoreTarget)
+                      }}
+                    />
                   ) : failed ? (
                     <div class="py-8 text-center opacity-60">{TEXT.loadFail}</div>
                   ) : (
@@ -467,6 +674,10 @@ export default defineComponent({
     }
 
     onBeforeUnmount(() => {
+      stopScrollSaveTimer()
+      stopRestoreScrollTimer()
+      restoreTarget = null
+      saveReadingPosition()
       resetAll()
       observer?.disconnect()
       observer = undefined
@@ -481,23 +692,39 @@ export default defineComponent({
                 {readerTitle.value}
                 <span class="font-normal text-sm opacity-70 ml-2">{TEXT.pickChapter}</span>
               </div>
-              <NButton size="small" class="mt-2" onClick={resetAll}>
+              <NButton size="small" class="mt-2" onClick={cancelFromFolderList}>
                 {TEXT.cancel}
               </NButton>
             </div>
             <div class="flex-1 min-h-0 overflow-auto p-2 flex flex-col gap-2">
-              {folderSources.value.map((source, index) => (
-                <NButton
-                  key={source.path}
-                  block
-                  class="justify-start!"
-                  onClick={() => void openSourceFromList(source.path, index)}>
-                  {source.label}
-                  <span class="opacity-60 ml-2 text-xs">
-                    {source.kind === 'zip' ? 'ZIP' : TEXT.folderKind}
-                  </span>
-                </NButton>
-              ))}
+              {folderSources.value.map((source, index) => {
+                const opened = getSourceRecord(source.path).opened
+                const progressLabel = formatSourceProgressLabel(source.path)
+                return (
+                  <NButton
+                    key={source.path}
+                    block
+                    class={localStyles.sourceBtn}
+                    onClick={() => void openSourceFromList(source.path, index)}>
+                    <div class={localStyles.sourceBtnInner}>
+                      <div class={localStyles.sourceTitleRow}>
+                        {opened && (
+                          <span class={localStyles.openedDot} title="已開啟過">
+                            ●
+                          </span>
+                        )}
+                        <span>{source.label}</span>
+                        <span class={localStyles.sourceKind}>
+                          {source.kind === 'zip' ? 'ZIP' : TEXT.folderKind}
+                        </span>
+                      </div>
+                      {progressLabel && (
+                        <span class={localStyles.sourceProgress}>{progressLabel}</span>
+                      )}
+                    </div>
+                  </NButton>
+                )
+              })}
             </div>
           </div>
         )
