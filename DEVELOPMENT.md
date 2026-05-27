@@ -31,8 +31,6 @@ pnpm tauri:build:fast
 
 產物位於 `src-tauri\target\release-fast\Gentleman-Manager.exe`。根目錄的 `Gentleman-Manager-v1.2.exe` / `.zip` 為本機發佈用產物，不納入 Git。
 
-圖示：可將 `logo.ico` 放在專案根目錄後建置；詳見本機 `skill/` 內輔助腳本（該目錄不推送 GitHub）。
-
 ## 倉庫體積說明
 
 | 不納入 Git | 取得方式 |
@@ -40,17 +38,7 @@ pnpm tauri:build:fast
 | `node_modules/` | `pnpm install` |
 | `src-tauri/target/` | 建置時自動產生 |
 | `dist/` | `pnpm build` / `pnpm tauri build` |
-| `.cursor/`、`skill/` | 本機 Cursor 規則與開發輔助，不推送 GitHub |
-
-## 從完整本機工作區同步
-
-若你另有含 `node_modules`、`target` 的完整開發目錄，可在該目錄執行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\sync-to-gentleman-manager.ps1 -Source "C:\path\to\full-workspace"
-```
-
-（腳本會排除依賴與建置快取後覆寫 `Gentleman-Manager`。若在完整工作區內，亦可執行該目錄的 `scripts\sync-to-gentleman-manager.ps1`。）
+| `.cursor/`、`skill/`、`logo.ico` | 本機 Cursor、腳本與自訂圖示，不推送 GitHub |
 
 ## 授權
 

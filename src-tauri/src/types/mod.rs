@@ -4,8 +4,6 @@ mod download_format;
 mod get_shelf_result;
 mod img_list;
 mod log_level;
-#[cfg(test)]
-mod ranking_fetch_test;
 mod ranking_period;
 mod search_result;
 mod tag;

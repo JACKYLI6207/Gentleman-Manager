@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="./src-tauri/icons/icon.png" width="96" alt="Gentleman Manager icon" />
-</p>
-
 # Gentleman Manager（紳士管理器）
 
 Gentleman Manager 是一個以 **Tauri 2 + Vue 3 + Rust** 製作的 Windows 桌面管理工具，用於瀏覽、搜尋、下載、整理與本地閱讀紳士站漫畫內容。
@@ -90,12 +86,7 @@ pnpm tauri:build:fast
 - `repair/`
 - 真實站點快照、下載成品、匯出資料與其他本機產物
 - 本機 `.env` 與暫存檔
-
-若要從完整本機工作區同步成 GitHub 用輕量樹，可使用：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\sync-to-gentleman-manager.ps1 -Source "C:\path\to\full-workspace"
-```
+- `logo.ico`（本機自訂圖示，可選）
 
 ## 注意事項
 

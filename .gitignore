@@ -32,6 +32,7 @@ repair/
 # Local Cursor / dev tooling (do not push to GitHub)
 .cursor/
 skill/
+logo.ico
 
 # Editor & OS
 .vscode/*

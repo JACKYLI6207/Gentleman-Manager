@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    wnacg_downloader_lib::run()
+    gentleman_manager_lib::run()
 }
