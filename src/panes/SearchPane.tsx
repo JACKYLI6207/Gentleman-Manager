@@ -564,6 +564,16 @@ export default defineComponent({
       return value
     }
 
+    function normalizeDialogPaths(value: string | string[] | null): string[] {
+      if (value === null) {
+        return []
+      }
+      if (Array.isArray(value)) {
+        return value.filter((path) => path.length > 0)
+      }
+      return value.length > 0 ? [value] : []
+    }
+
     function safeSnapshotExportFilename(label: string) {
       const safeLabel = label.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim()
       return `${safeLabel || 'snapshot'}.gm-snapshot.json`
@@ -3537,21 +3547,17 @@ export default defineComponent({
       })
     }
 
-    async function importSnapshotExportFile() {
-      const selectedPath = normalizeDialogPath(
-        await open({
-          multiple: false,
-          filters: [{ name: 'Gentleman Manager 快照', extensions: ['json'] }],
-        }),
-      )
-      if (selectedPath === null) {
-        return
-      }
+    async function importSnapshotFromPath(
+      selectedPath: string,
+      options?: { silent?: boolean },
+    ): Promise<boolean> {
       const readResult = await commands.readSnapshotExportFile(selectedPath)
       if (readResult.status === 'error') {
         console.error(readResult.error)
-        message.error(readResult.error.err_message)
-        return
+        if (!options?.silent) {
+          message.error(readResult.error.err_message)
+        }
+        return false
       }
 
       let parsed: unknown
@@ -3559,12 +3565,16 @@ export default defineComponent({
         parsed = JSON.parse(readResult.data)
       } catch (err) {
         console.error(err)
-        message.error('快照存檔格式錯誤，無法載入')
-        return
+        if (!options?.silent) {
+          message.error('快照存檔格式錯誤，無法載入')
+        }
+        return false
       }
       if (!isSnapshotExportFile(parsed)) {
-        message.error('這不是有效的 Gentleman Manager 快照存檔')
-        return
+        if (!options?.silent) {
+          message.error('這不是有效的 Gentleman Manager 快照存檔')
+        }
+        return false
       }
 
       const snapshot = parsed.snapshot
@@ -3575,8 +3585,10 @@ export default defineComponent({
           ...globalSnapshotMetas.value.filter((item) => item.id !== snapshot.meta.id),
         ]
         saveGlobalSnapshotMetas()
-        message.success(`已載入 ${globalSnapshotLabel(snapshot.meta)}`)
-        return
+        if (!options?.silent) {
+          message.success(`已載入 ${globalSnapshotLabel(snapshot.meta)}`)
+        }
+        return true
       }
 
       scopedScanCaches.value = [
@@ -3584,7 +3596,44 @@ export default defineComponent({
         ...scopedScanCaches.value.filter((item) => item.id !== snapshot.cache.id),
       ]
       saveScopedScanCaches()
-      message.success(`已載入 ${scanCacheLabel(snapshot.cache)}`)
+      if (!options?.silent) {
+        message.success(`已載入 ${scanCacheLabel(snapshot.cache)}`)
+      }
+      return true
+    }
+
+    async function importSnapshotExportFile() {
+      const selectedPaths = normalizeDialogPaths(
+        await open({
+          multiple: true,
+          filters: [{ name: 'Gentleman Manager 快照', extensions: ['json'] }],
+        }),
+      )
+      if (selectedPaths.length === 0) {
+        return
+      }
+
+      const batch = selectedPaths.length > 1
+      let loaded = 0
+      let failed = 0
+      for (const selectedPath of selectedPaths) {
+        const ok = await importSnapshotFromPath(selectedPath, { silent: batch })
+        if (ok) {
+          loaded += 1
+        } else {
+          failed += 1
+        }
+      }
+
+      if (batch) {
+        if (loaded > 0) {
+          message.success(
+            `已載入 ${loaded} 個快照${failed > 0 ? `，${failed} 個無法載入` : ''}`,
+          )
+        } else {
+          message.error('所選檔案均無法載入為快照')
+        }
+      }
     }
 
     async function loadSnapshotRepairFile(kind: 'sort' | 'missing') {
@@ -4151,7 +4200,7 @@ export default defineComponent({
             <div class="flex-1 flex flex-col gap-3 items-center justify-center p-4">
               <NEmpty description="尚無收藏快照。使用全站快照或主/子分類搜尋完成掃描後會自動保存。" />
               <NButton size="small" secondary onClick={() => void importSnapshotExportFile()}>
-                快照載入
+                快照載入（可多選）
               </NButton>
             </div>
           ) : (
@@ -4161,7 +4210,7 @@ export default defineComponent({
                   共 {globalSnapshotMetas.value.length + scopedScanCaches.value.length} 個收藏快照
                 </span>
                 <NButton size="tiny" secondary onClick={() => void importSnapshotExportFile()}>
-                  快照載入
+                  快照載入（可多選）
                 </NButton>
               </div>
               <ul class="flex-1 min-h-0 overflow-auto px-2 pb-2 list-none m-0">
