@@ -3,6 +3,7 @@ import { NButton, ButtonProps } from 'naive-ui'
 import { useStore } from '../store.ts'
 import { ProgressData } from '../types.ts'
 import { commands } from '../bindings.ts'
+import { comicQueueStub } from '../utils/comicQueueStub.ts'
 
 export default defineComponent({
   name: 'DownloadButton',
@@ -60,6 +61,26 @@ export default defineComponent({
       }
     })
 
+    function parseImageCount(additionalInfo: string): number {
+      const match = additionalInfo.match(/(\d+)\s*張/)
+      if (match === null) {
+        return 0
+      }
+      const value = parseInt(match[1], 10)
+      return Number.isNaN(value) ? 0 : value
+    }
+
+    function resolveQueueStub() {
+      if (store.pickedComic?.id === props.comicId) {
+        return comicQueueStub(props.comicId, store.pickedComic.title, store.pickedComic.imageCount)
+      }
+      const inSearch = store.searchResult?.comics.find((item) => item.id === props.comicId)
+      if (inSearch !== undefined) {
+        return comicQueueStub(props.comicId, inSearch.title, parseImageCount(inSearch.additionalInfo))
+      }
+      return comicQueueStub(props.comicId, `漫畫 #${props.comicId}`, 0)
+    }
+
     async function handleButtonClick() {
       const state = comicProgress.value?.state
       if (state === 'Downloading' || state === 'Pending') {
@@ -70,13 +91,7 @@ export default defineComponent({
           console.error(result.error)
         }
       } else {
-        const result = await commands.getComic(props.comicId)
-        if (result.status === 'error') {
-          console.error(result.error)
-          return
-        }
-        const comic = result.data
-        await commands.createDownloadTask(comic)
+        await commands.createDownloadTask(resolveQueueStub())
       }
     }
 
