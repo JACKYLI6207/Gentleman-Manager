@@ -71,6 +71,8 @@ import { chineseSearchVariants } from '../chineseText.ts'
 
 /** 官網列表每頁 20 本；UI 分頁依「每頁顯示」按需抓取官網頁 */
 const SERVER_PAGE_SIZE = 20
+/** 快照存檔 ID 順序：與官網列表一致（頂部較新／大 ID，底部較舊／小 ID） */
+const SNAPSHOT_ARCHIVE_ID_SORT: SearchSortOrder = 'comicIdDesc'
 const COVER_LOAD_BATCH = 20
 /** 連續請求間隔，降低官網限流（韓漫模式載入全部頁時使用） */
 const PAGE_FETCH_DELAY_MS = 300
@@ -81,6 +83,8 @@ const SCOPED_SCAN_CACHE_STORAGE_KEY = 'wnacg.scopedScanCaches.v1'
 const SCOPED_SEARCH_PATH_CHOICE_STORAGE_KEY = 'wnacg.scopedSearchPathChoice.v1'
 const SCOPED_SEARCH_SCAN_MODE_STORAGE_KEY = 'wnacg.scopedSearchScanMode.v1'
 const GLOBAL_SNAPSHOT_META_STORAGE_KEY = 'wnacg.globalSnapshots.v1'
+const GLOBAL_SNAPSHOT_ID_UPDATE_DUPLICATE_LIMIT_STORAGE_KEY = 'wnacg.globalSnapshotIdUpdateDuplicateLimit.v1'
+const DEFAULT_GLOBAL_SNAPSHOT_ID_UPDATE_DUPLICATE_LIMIT = 20
 const ACTIVE_GLOBAL_SNAPSHOT_STORAGE_KEY = 'wnacg.activeGlobalSnapshotId.v1'
 const GLOBAL_SNAPSHOT_DB_NAME = 'wnacg.globalSnapshots.db'
 const GLOBAL_SNAPSHOT_STORE_NAME = 'snapshots'
@@ -112,6 +116,29 @@ const SEARCH_SCOPE_DROPDOWN_OPTIONS = [
 type SearchResultLayout = 'list' | 'grid4' | 'grid6' | 'grid8' | 'grid10'
 
 const SEARCH_LAYOUT_STORAGE_KEY = 'searchResultLayout'
+
+function normalizeGlobalSnapshotIdUpdateDuplicateLimit(value: number | null | undefined): number {
+  const n = Math.floor(Number(value ?? DEFAULT_GLOBAL_SNAPSHOT_ID_UPDATE_DUPLICATE_LIMIT))
+  if (!Number.isFinite(n) || n < 0) {
+    return DEFAULT_GLOBAL_SNAPSHOT_ID_UPDATE_DUPLICATE_LIMIT
+  }
+  return n
+}
+
+function loadGlobalSnapshotIdUpdateDuplicateLimit(): number {
+  const saved = localStorage.getItem(GLOBAL_SNAPSHOT_ID_UPDATE_DUPLICATE_LIMIT_STORAGE_KEY)
+  if (saved === null) {
+    return DEFAULT_GLOBAL_SNAPSHOT_ID_UPDATE_DUPLICATE_LIMIT
+  }
+  return normalizeGlobalSnapshotIdUpdateDuplicateLimit(Number(saved))
+}
+
+function saveGlobalSnapshotIdUpdateDuplicateLimit(value: number) {
+  localStorage.setItem(
+    GLOBAL_SNAPSHOT_ID_UPDATE_DUPLICATE_LIMIT_STORAGE_KEY,
+    String(normalizeGlobalSnapshotIdUpdateDuplicateLimit(value)),
+  )
+}
 
 const SEARCH_LAYOUT_OPTIONS: { key: SearchResultLayout; label: string }[] = [
   { key: 'grid4', label: '每排 4 個' },
@@ -335,12 +362,14 @@ export default defineComponent({
       failedAttempts: number
       queuedRetryPages: number
       retrySuccessPages: number
+      selfCheckHint?: string | null
     } | null>(null)
     const globalSnapshotManualRequest = ref<{ startPage: number; endPage: number } | null>(null)
     const globalSnapshotPauseReason = ref<string | null>(null)
     const globalSnapshotResumeShowing = ref<boolean>(false)
     const globalSnapshotResumeSelectedIds = ref<string[]>([])
     const globalSnapshotResumeStrategy = ref<GlobalSnapshotResumeStrategy>('page')
+    const globalSnapshotIdUpdateDuplicateLimit = ref(loadGlobalSnapshotIdUpdateDuplicateLimit())
     const globalSnapshotStartedAt = ref<number | null>(null)
     const globalSnapshotElapsedTick = ref(Date.now())
     const snapshotRepairShowing = ref<boolean>(false)
@@ -603,6 +632,10 @@ export default defineComponent({
       return max
     }
 
+    function sortComicsForSnapshotArchive(comics: ComicInSearch[]): ComicInSearch[] {
+      return sortSearchComics(comics, SNAPSHOT_ARCHIVE_ID_SORT)
+    }
+
     function sortedUniqueComicsById(comics: ComicInSearch[]) {
       const byId = new Map<number, ComicInSearch>()
       for (const comic of comics) {
@@ -610,7 +643,7 @@ export default defineComponent({
           byId.set(comic.id, comic)
         }
       }
-      return [...byId.values()].sort((a, b) => b.id - a.id)
+      return sortComicsForSnapshotArchive([...byId.values()])
     }
 
     function makeGlobalSnapshotExportFile(
@@ -1131,7 +1164,31 @@ export default defineComponent({
       return source.type === 'tag' && source.cateId !== undefined
     })
 
+    const isGlobalSnapshotDialogOpen = computed(
+      () => globalSnapshotResumeShowing.value || globalSnapshotConfirmShowing.value,
+    )
+
+    function selectGlobalSnapshotResumeStrategy(strategy: GlobalSnapshotResumeStrategy) {
+      globalSnapshotResumeStrategy.value = strategy
+    }
+
+    function selectGlobalSnapshotScanMode(mode: 'conservative' | 'aggressive') {
+      globalSnapshotScanMode.value = mode
+    }
+
+    function prepareGlobalSnapshotResumeScan() {
+      globalSnapshotCancelled = true
+      globalSnapshotManualRequestResolve?.()
+      globalSnapshotManualRequestResolve = undefined
+      globalSnapshotManualRequest.value = null
+      clearGlobalSnapshotProgress()
+      globalSnapshotCancelled = false
+    }
+
     const isScopedScanOverlay = computed(() => {
+      if (isGlobalSnapshotDialogOpen.value) {
+        return false
+      }
       if (globalSnapshotScanProgress.value !== null) {
         return true
       }
@@ -1232,7 +1289,7 @@ export default defineComponent({
         if (manual !== null) {
           return `已準備發送第 ${manual.startPage}-${manual.endPage} 頁請求，按「發送請求」後繼續（已收集 ${globalProgress.matchedCount} 本，已用時 ${globalSnapshotElapsedText.value}）`
         }
-        return `正在建立${globalSnapshotScanningLabel.value} ${globalProgress.current}/${globalProgress.total} 頁（成功 ${globalProgress.successPages}，失敗嘗試 ${globalProgress.failedAttempts}，待補掃 ${globalProgress.queuedRetryPages}，補掃成功 ${globalProgress.retrySuccessPages}，已收集 ${globalProgress.matchedCount} 本，已用時 ${globalSnapshotElapsedText.value}）`
+        return `正在建立${globalSnapshotScanningLabel.value} ${globalProgress.current}/${globalProgress.total} 頁（成功 ${globalProgress.successPages}，失敗嘗試 ${globalProgress.failedAttempts}，待補掃 ${globalProgress.queuedRetryPages}，補掃成功 ${globalProgress.retrySuccessPages}，已收集 ${globalProgress.matchedCount} 本，已用時 ${globalSnapshotElapsedText.value}）${globalProgress.selfCheckHint ? ` · ${globalProgress.selfCheckHint}` : ''}`
       }
       const scoped = scopedSearchProgress.value
       if (scoped !== null) {
@@ -1799,11 +1856,18 @@ export default defineComponent({
       }
     }
 
+    function maxServerListPage(): number {
+      if (totalCountHint.value <= 0) {
+        return totalServerPagesHint.value
+      }
+      return Math.max(totalServerPagesHint.value, Math.ceil(totalCountHint.value / SERVER_PAGE_SIZE))
+    }
+
     function ingestSearchMetadata(result: SearchResult, requestedServerPage?: number) {
       const cachePage = requestedServerPage ?? result.currentPage
       pageCache.set(cachePage, result)
       const total = effectiveTotalCount(result)
-      if (!totalCountRefined.value) {
+      if (!totalCountRefined.value || totalCountHint.value <= 0) {
         totalServerPagesHint.value = Math.max(
           totalServerPagesHint.value,
           result.totalPage > 0 ? result.totalPage : Math.max(1, Math.ceil(total / SERVER_PAGE_SIZE)),
@@ -1907,7 +1971,11 @@ export default defineComponent({
 
       try {
         for (let p = firstServerPage; p <= lastServerPage; p++) {
-          if (p > totalServerPagesHint.value) {
+          // 總數尚未知時勿 cap 官網頁（否則每頁 40/60 只會載入 20 筆）；已知總數時才依 maxServerListPage 上限
+          if (totalCountHint.value > 0 && p > maxServerListPage()) {
+            break
+          }
+          if (totalCountHint.value <= 0 && p > totalServerPagesHint.value) {
             break
           }
 
@@ -2306,6 +2374,97 @@ export default defineComponent({
       return 0
     }
 
+    function missingSnapshotPagesInRange(completed: Set<number>, from: number, to: number) {
+      const missing: number[] = []
+      for (let page = from; page <= to; page += 1) {
+        if (!completed.has(page)) {
+          missing.push(page)
+        }
+      }
+      return missing
+    }
+
+    function isUsableSnapshotPageResult(
+      result: SearchResult | undefined,
+      requestedPage: number,
+      totalPages: number,
+      failAttempts: number,
+    ) {
+      if (result === undefined) {
+        return false
+      }
+      if (result.currentPage !== requestedPage) {
+        return false
+      }
+      if (result.comics.length === 0) {
+        return false
+      }
+      if (requestedPage >= totalPages) {
+        return true
+      }
+      if (result.comics.length >= SERVER_PAGE_SIZE) {
+        return true
+      }
+      return failAttempts >= 4 && result.comics.length >= 1
+    }
+
+    function validateSnapshotScanIntegrity(input: {
+      targetLabel: string
+      totalPages: number
+      expectedTotalCount: number
+      completedPages: Set<number>
+      retryQueuedPages: Set<number>
+      uniqueComicCount: number
+      requireFullPages: boolean
+    }): { ok: true } | { ok: false; message: string } {
+      if (input.requireFullPages) {
+        const missing = missingSnapshotPagesInRange(input.completedPages, 1, input.totalPages)
+        if (missing.length > 0) {
+          const preview =
+            missing.length <= 8
+              ? missing.join('、')
+              : `${missing.slice(0, 6).join('、')}…等 ${missing.length} 頁`
+          return {
+            ok: false,
+            message: `${input.targetLabel} 收尾驗證：官網第 ${preview} 未掃描`,
+          }
+        }
+        if (input.completedPages.size < input.totalPages) {
+          return {
+            ok: false,
+            message: `${input.targetLabel} 收尾驗證：僅完成 ${input.completedPages.size}/${input.totalPages} 頁`,
+          }
+        }
+      }
+      if (input.expectedTotalCount > 0 && input.uniqueComicCount < input.expectedTotalCount) {
+        return {
+          ok: false,
+          message: `${input.targetLabel} 收尾驗證：收集 ${input.uniqueComicCount}/${input.expectedTotalCount} 本（差 ${input.expectedTotalCount - input.uniqueComicCount} 本）`,
+        }
+      }
+      if (input.retryQueuedPages.size > 0) {
+        return {
+          ok: false,
+          message: `${input.targetLabel} 收尾驗證：仍有 ${input.retryQueuedPages.size} 頁待補掃`,
+        }
+      }
+      return { ok: true }
+    }
+
+    function validateSnapshotComicIdOrder(comics: ComicInSearch[]): { ok: true } | { ok: false; message: string } {
+      for (let index = 1; index < comics.length; index += 1) {
+        const prev = comics[index - 1]!
+        const current = comics[index]!
+        if (current.id >= prev.id) {
+          return {
+            ok: false,
+            message: `ID 排序校對失敗：第 ${index}→${index + 1} 筆（${prev.id} → ${current.id}），應由大到小排列（頂部 ID 較大、底部 ID 較小）`,
+          }
+        }
+      }
+      return { ok: true }
+    }
+
     function comicMatchesCateScope(comic: ComicInSearch, cateId: number) {
       const listCateId = comic.listCateId
       if (listCateId === null || listCateId === undefined) {
@@ -2427,10 +2586,16 @@ export default defineComponent({
       totalPages?: number
     }) {
       if (cache.totalPages !== undefined && cache.totalPages > 0) {
-        const completedPages =
-          cache.scanCompletedPageRanges !== undefined
-            ? pageSetFromRanges(cache.scanCompletedPageRanges, cache.totalPages).size
-            : cache.scanCompletedPages
+        let completedPages: number | undefined
+        if (cache.scanCompletedPageRanges !== undefined) {
+          const fromRanges = pageSetFromRanges(cache.scanCompletedPageRanges, cache.totalPages).size
+          completedPages =
+            fromRanges > 0
+              ? fromRanges
+              : cache.scanCompletedPages
+        } else {
+          completedPages = cache.scanCompletedPages
+        }
         if (completedPages !== undefined) {
           const percent = (Math.min(completedPages, cache.totalPages) / cache.totalPages) * 100
           return completedPages >= cache.totalPages ? 100 : Math.min(99, clampScanCompletionPercent(percent))
@@ -2601,7 +2766,7 @@ export default defineComponent({
       const existing = meta === null ? undefined : await getGlobalSnapshotRecord(meta.id)
       const mergedComics = existing?.comics ? [...existing.comics] : []
       mergeComicsInto(mergedComics, batchComics)
-      const snapshotComics = sortSearchComics(mergedComics, 'createDateDesc')
+      const snapshotComics = sortComicsForSnapshotArchive(mergedComics)
       const updatedMeta: GlobalSnapshotMeta = {
         ...nextMeta,
         savedAt: new Date().toISOString(),
@@ -2667,6 +2832,7 @@ export default defineComponent({
       const result = await commands.writeSnapshotWebsiteFile(
         safeSnapshotExportFilename(`${snapshotScanTargetLabel(meta)}快照 ${snapshotRepairTimestamp()}`),
         JSON.stringify(sortedFile, null, 2),
+        true,
       )
       if (result.status === 'error') {
         console.error(result.error)
@@ -2692,7 +2858,7 @@ export default defineComponent({
       if (options.addedCount <= 0) {
         if (websitePath !== null) {
           message.success(
-            `${target.label}快照已是最新，無須更新；已同步導出至 Website Snapshot（舊檔已移至 old 資料夾）`,
+            `${target.label}快照已是最新，無須更新；已同步導出至 Website Snapshot（舊檔已刪除）`,
           )
         } else {
           message.success(`${target.label}快照已是最新，無須更新`)
@@ -2701,7 +2867,7 @@ export default defineComponent({
       }
       if (websitePath !== null) {
         message.success(
-          `${target.label}快照已更新至最新（新增 ${options.addedCount} 本）；已導出至 Website Snapshot（舊檔已移至 old 資料夾）`,
+          `${target.label}快照已更新至最新（新增 ${options.addedCount} 本）；已導出至 Website Snapshot（舊檔已刪除）`,
         )
       } else {
         message.warning(`${target.label}快照已更新（新增 ${options.addedCount} 本），但導出 Website Snapshot 失敗`)
@@ -2854,9 +3020,10 @@ export default defineComponent({
         }
         return undefined
       }
-      const firstPageResult = firstPage
+      let firstPageResult = firstPage
 
-      const totalPages = scanPageCountFromResult(firstPage)
+      let totalPages = scanPageCountFromResult(firstPage)
+      let expectedTotalCount = effectiveTotalCount(firstPage)
       const resumeRecord = resumeMeta === undefined ? undefined : await getGlobalSnapshotRecord(resumeMeta.id)
       const updateRecord = updateBaseMeta === undefined ? undefined : await getGlobalSnapshotRecord(updateBaseMeta.id)
       if (resumeMeta !== undefined && resumeRecord === undefined) {
@@ -2879,6 +3046,15 @@ export default defineComponent({
       let consecutiveFailedAttempts = 0
       let retrySuccessPages = 0
       let retryMode = false
+      let selfCheckHint: string | null = null
+      const pageFailAttempts = new Map<number, number>()
+      const comicIdToPage = new Map<number, number>()
+      for (const comic of resumeRecord?.comics ?? []) {
+        comicIdToPage.set(comic.id, 0)
+      }
+      for (const comic of updateRecord?.comics ?? []) {
+        comicIdToPage.set(comic.id, 0)
+      }
       globalSnapshotScanProgress.value = {
         current: completedPages.size,
         total: totalPages,
@@ -2887,6 +3063,7 @@ export default defineComponent({
         failedAttempts: failedPageAttempts,
         queuedRetryPages: 0,
         retrySuccessPages,
+        selfCheckHint,
       }
 
       const retryQueuedPages = new Set<number>()
@@ -2899,22 +3076,65 @@ export default defineComponent({
           failedAttempts: failedPageAttempts,
           queuedRetryPages: retryQueuedPages.size,
           retrySuccessPages,
+          selfCheckHint,
         }
       }
       updateGlobalSnapshotProgress()
 
-      function appendPageResult(page: number, result: SearchResult) {
+      function getPageFailAttempts(page: number) {
+        return pageFailAttempts.get(page) ?? 0
+      }
+
+      function bumpPageFailAttempts(page: number) {
+        pageFailAttempts.set(page, getPageFailAttempts(page) + 1)
+      }
+
+      function appendPageResultInternal(page: number, result: SearchResult) {
         if (completedPages.has(page)) {
           return
         }
         mergeComicsInto(batchComics, result.comics)
+        for (const comic of result.comics) {
+          comicIdToPage.set(comic.id, page)
+        }
         completedPages.add(page)
         retryQueuedPages.delete(page)
+        pageFailAttempts.delete(page)
         consecutiveFailedAttempts = 0
         if (retryMode) {
           retrySuccessPages += 1
         }
         updateGlobalSnapshotProgress()
+      }
+
+      function acceptValidatedPageResult(page: number, result: SearchResult | undefined) {
+        if (result === undefined) {
+          return false
+        }
+        const attempts = getPageFailAttempts(page)
+        if (!isUsableSnapshotPageResult(result, page, totalPages, attempts)) {
+          bumpPageFailAttempts(page)
+          selfCheckHint = `第 ${page} 頁回應異常（回傳頁碼 ${result.currentPage}，${result.comics.length} 本）`
+          updateGlobalSnapshotProgress()
+          queueRetryPage(page)
+          return false
+        }
+        for (const comic of result.comics) {
+          const prevPage = comicIdToPage.get(comic.id)
+          if (prevPage !== undefined && prevPage !== 0 && prevPage !== page) {
+            bumpPageFailAttempts(page)
+            selfCheckHint = `第 ${page} 頁與第 ${prevPage} 頁 ID ${comic.id} 重複，重試中`
+            updateGlobalSnapshotProgress()
+            queueRetryPage(page)
+            return false
+          }
+        }
+        appendPageResultInternal(page, result)
+        return true
+      }
+
+      function appendPageResult(page: number, result: SearchResult) {
+        acceptValidatedPageResult(page, result)
       }
 
       function queueRetryPage(page: number) {
@@ -2940,8 +3160,21 @@ export default defineComponent({
           return persistedSnapshotMeta
         }
         const completed = completedPages.size
-        const rawCompletionPercent = totalPages > 0 ? (completed / totalPages) * 100 : 100
-        const completionPercent = totalPages > 0 && completed < totalPages ? Math.min(99, rawCompletionPercent) : 100
+        let completionPercent = totalPages > 0 ? (completed / totalPages) * 100 : 100
+        if (totalPages > 0 && completed < totalPages) {
+          completionPercent = Math.min(99, completionPercent)
+        } else {
+          completionPercent = 100
+        }
+        let scanCompletedPages = completed
+        let scanCompletedPageRanges = pageRangesFromSet(completedPages)
+        const updateBaseWasComplete =
+          updateBaseMeta !== undefined && isSnapshotScanComplete(updateBaseMeta)
+        if (updateBaseWasComplete) {
+          completionPercent = 100
+          scanCompletedPages = totalPages
+          scanCompletedPageRanges = totalPages > 0 ? [{ start: 1, end: totalPages }] : []
+        }
         const comicsToSave = batchComics
         batchComics = []
         persistedSnapshotMeta = await upsertGlobalSnapshot(
@@ -2950,8 +3183,8 @@ export default defineComponent({
           comicsToSave,
           totalPages,
           completionPercent,
-          completed,
-          pageRangesFromSet(completedPages),
+          scanCompletedPages,
+          scanCompletedPageRanges,
         )
         persistedComicCount = persistedSnapshotMeta.totalCount
         persistedCompletedPageCount = completedPages.size
@@ -3084,12 +3317,19 @@ export default defineComponent({
         if (pages.length === 0) {
           return true
         }
+        // 快照掃描激進模式：自動發送；僅 Cloudflare 挑戰時才 waitGlobalManualRequest
+        if (globalSnapshotScanMode.value === 'aggressive') {
+          return !shouldStop()
+        }
         const startPage = Math.min(...pages)
         const endPage = Math.max(...pages)
         return await waitGlobalManualRequest(startPage, endPage)
       }
 
       async function waitConsecutiveFailureCooldown() {
+        if (globalSnapshotScanMode.value === 'aggressive') {
+          return !shouldStop()
+        }
         if (consecutiveFailedAttempts <= 3) {
           return true
         }
@@ -3192,29 +3432,275 @@ export default defineComponent({
         return !shouldStop()
       }
 
-      async function fetchUpdatePageWithRetry(page: number) {
-        while (!shouldStop()) {
+      async function runLocalSnapshotSelfCheck(requireFullPages: boolean) {
+        const integrity = validateSnapshotScanIntegrity({
+          targetLabel: target.label,
+          totalPages,
+          expectedTotalCount,
+          completedPages,
+          retryQueuedPages,
+          uniqueComicCount: comicIdToPage.size,
+          requireFullPages,
+        })
+        if (!integrity.ok) {
+          return integrity
+        }
+        if (persistedSnapshotMeta === null) {
+          return { ok: true as const }
+        }
+        const record = await getGlobalSnapshotRecord(persistedSnapshotMeta.id)
+        if (record === undefined) {
+          return { ok: false as const, message: `${target.label} 收尾驗證：找不到快照內容` }
+        }
+        const sorted = sortComicsForSnapshotArchive(record.comics)
+        return validateSnapshotComicIdOrder(sorted)
+      }
+
+      async function ensureSnapshotIdSorted(meta: GlobalSnapshotMeta) {
+        const record = await getGlobalSnapshotRecord(meta.id)
+        if (record === undefined) {
+          return meta
+        }
+        const sorted = sortComicsForSnapshotArchive(record.comics)
+        const orderCheck = validateSnapshotComicIdOrder(sorted)
+        if (!orderCheck.ok) {
+          message.warning(orderCheck.message)
+        }
+        if (
+          sorted.length === record.comics.length &&
+          sorted.every((comic, index) => comic.id === record.comics[index]?.id)
+        ) {
+          return meta
+        }
+        await putGlobalSnapshotRecord({ id: meta.id, comics: sorted })
+        const updatedMeta: GlobalSnapshotMeta = { ...meta, totalCount: sorted.length }
+        globalSnapshotMetas.value = [
+          updatedMeta,
+          ...globalSnapshotMetas.value.filter((item) => item.id !== updatedMeta.id),
+        ]
+        saveGlobalSnapshotMetas()
+        return updatedMeta
+      }
+
+      async function appendFreshFirstPage() {
+        if (globalSnapshotScanMode.value === 'aggressive') {
+          if (!(await waitAggressiveBatchSend([1]))) {
+            return false
+          }
+        }
+        const result = await fetchPageResult(1)
+        if (result === undefined) {
+          queueRetryPage(1)
+          return false
+        }
+        firstPageResult = result
+        const refreshedTotal = scanPageCountFromResult(result)
+        const refreshedCount = effectiveTotalCount(result)
+        if (refreshedTotal > totalPages) {
+          selfCheckHint = `官網總頁數更新為 ${refreshedTotal}（原 ${totalPages}）`
+          totalPages = refreshedTotal
+        }
+        if (refreshedCount > expectedTotalCount) {
+          expectedTotalCount = refreshedCount
+        }
+        completedPages.delete(1)
+        for (const comic of result.comics) {
+          if (comicIdToPage.get(comic.id) === 1) {
+            comicIdToPage.delete(comic.id)
+          }
+        }
+        acceptValidatedPageResult(1, result)
+        updateGlobalSnapshotProgress()
+        return true
+      }
+
+      async function fillMissingSnapshotPages() {
+        if (!(await appendFreshFirstPage())) {
+          return false
+        }
+        let guard = 0
+        while (!shouldStop() && guard < 20_000) {
+          guard += 1
+          const missing = missingSnapshotPagesInRange(completedPages, 1, totalPages)
+          if (missing.length === 0) {
+            break
+          }
+          selfCheckHint = `補缺頁：尚有 ${missing.length} 頁`
+          updateGlobalSnapshotProgress()
+          missing.sort((a, b) => b - a)
+          const batchSize = globalSnapshotScanMode.value === 'aggressive' ? Math.min(30, missing.length) : 1
+          const batch = missing.slice(0, batchSize)
           if (globalSnapshotScanMode.value === 'aggressive') {
-            if (!(await waitAggressiveBatchSend([page]))) {
-              return undefined
+            if (!(await waitAggressiveBatchSend(batch))) {
+              return false
             }
-          } else if (page !== 1) {
-            const continued = await sleepUnlessCancelled(randomInt(500, 1500), shouldStop)
-            if (!continued || shouldStop()) {
-              return undefined
+            const outcome = await collectAggressivePages(batch)
+            await flushGlobalSnapshotBatch()
+            if (outcome.challenged) {
+              const cfPages = outcome.failedPages.length > 0 ? outcome.failedPages : batch
+              if (!(await waitGlobalManualRequest(Math.min(...cfPages), Math.max(...cfPages)))) {
+                return false
+              }
+              continue
+            }
+            if (!(await waitConsecutiveFailureCooldown())) {
+              return false
+            }
+          } else {
+            for (const page of batch) {
+              if (shouldStop()) {
+                return false
+              }
+              if (page === 1) {
+                if (!(await appendFreshFirstPage())) {
+                  return false
+                }
+                continue
+              }
+              const continued = await sleepUnlessCancelled(randomInt(500, 1500), shouldStop)
+              if (!continued || shouldStop()) {
+                return false
+              }
+              const result = await fetchPageResult(page)
+              if (result === undefined) {
+                queueRetryPage(page)
+                continue
+              }
+              acceptValidatedPageResult(page, result)
+            }
+            await flushGlobalSnapshotBatch()
+            if (!(await waitConsecutiveFailureCooldown())) {
+              return false
             }
           }
-          const result = await fetchSnapshotScanTargetPage(target, page)
-          if (result.data !== undefined) {
+          if (!(await drainRetryQueue())) {
+            return false
+          }
+        }
+        return !shouldStop()
+      }
+
+      async function finalizeSnapshotScan(requireFullPages: boolean) {
+        globalSnapshotScanningLabel.value = `${target.label}收尾驗證`
+        selfCheckHint = '本地自檢中（不發請求）'
+        updateGlobalSnapshotProgress()
+        let check = await runLocalSnapshotSelfCheck(requireFullPages)
+        if (!check.ok) {
+          message.info(check.message)
+        }
+
+        if (requireFullPages && !shouldStop()) {
+          globalSnapshotScanningLabel.value = `${target.label}補缺頁`
+          await fillMissingSnapshotPages()
+          await flushGlobalSnapshotBatch()
+        }
+
+        globalSnapshotScanningLabel.value = `${target.label}ID 排序校對`
+        selfCheckHint = '依 ID 由大到小排序存檔（頂部較新）'
+        updateGlobalSnapshotProgress()
+        if (persistedSnapshotMeta !== null) {
+          persistedSnapshotMeta = await ensureSnapshotIdSorted(persistedSnapshotMeta)
+          if (requireFullPages && completedPages.size >= totalPages) {
+            persistedSnapshotMeta = await upsertGlobalSnapshot(
+              persistedSnapshotMeta,
+              target,
+              [],
+              totalPages,
+              100,
+              completedPages.size,
+              pageRangesFromSet(completedPages),
+            )
+          }
+        }
+
+        check = await runLocalSnapshotSelfCheck(requireFullPages)
+        selfCheckHint = check.ok ? '收尾完成' : check.message
+        updateGlobalSnapshotProgress()
+        if (!check.ok) {
+          message.warning(check.message)
+        } else {
+          message.success(`${target.label}收尾驗證通過`)
+        }
+        return check.ok
+      }
+
+      async function collectAggressiveUpdatePages(pages: number[]) {
+        const failedPages = new Set<number>()
+        let challenged = false
+        const results = new Map<number, SearchResult>()
+
+        if (shouldStop()) {
+          return { challenged, failedPages: [] as number[], results }
+        }
+
+        const pageResults = await Promise.all(
+          pages.map(async (page) => {
+            if (shouldStop()) {
+              return { page, result: undefined, failure: undefined }
+            }
+            const result = await fetchSnapshotScanTargetPage(target, page)
+            if (result.data === undefined) {
+              const failure = result.reason === undefined ? undefined : { reason: result.reason }
+              return { page, result: undefined, failure }
+            }
+            return { page, result: result.data, failure: undefined }
+          }),
+        )
+
+        if (shouldStop()) {
+          return { challenged, failedPages: [] as number[], results }
+        }
+
+        for (const item of pageResults) {
+          if (item.result !== undefined) {
+            results.set(item.page, item.result)
+            retryQueuedPages.delete(item.page)
+            continue
+          }
+          queueRetryPage(item.page)
+          failedPages.add(item.page)
+          if (item.failure !== undefined && isCloudflareChallengeFailure(item.failure.reason)) {
+            challenged = true
+          }
+        }
+
+        if (challenged) {
+          globalSnapshotPauseReason.value = '已被 Cloudflare 挑戰，請換 IP 或等待'
+        }
+
+        return {
+          challenged,
+          failedPages: [...failedPages].sort((a, b) => a - b),
+          results,
+        }
+      }
+
+      async function fetchUpdatePageForScan(page: number): Promise<SearchResult | undefined> {
+        while (!shouldStop()) {
+          const response = await fetchSnapshotScanTargetPage(target, page)
+          if (response.data !== undefined) {
             retryQueuedPages.delete(page)
-            return result.data
+            consecutiveFailedAttempts = 0
+            return response.data
           }
           if (shouldStop()) {
             return undefined
           }
           queueRetryPage(page)
-          if (result.reason !== undefined && isCloudflareChallengeFailure(result.reason)) {
+          const challenged =
+            response.reason !== undefined && isCloudflareChallengeFailure(response.reason)
+          if (challenged) {
             globalSnapshotPauseReason.value = '已被 Cloudflare 挑戰，請換 IP 或等待'
+            for (let remaining = 20; remaining >= 1; remaining -= 1) {
+              if (shouldStop()) {
+                return undefined
+              }
+              globalSnapshotPauseReason.value = `已被 Cloudflare 挑戰，${remaining} 秒後重試第 ${page} 頁`
+              updateGlobalSnapshotProgress()
+              await sleep(1000)
+            }
+            globalSnapshotPauseReason.value = null
+            continue
           }
           if (!(await waitConsecutiveFailureCooldown())) {
             return undefined
@@ -3247,55 +3733,196 @@ export default defineComponent({
             }
           }
           mergeComicsInto(batchComics, newComics)
+          for (const comic of newComics) {
+            comicIdToPage.set(comic.id, page)
+          }
           completedPages.add(page)
           retryQueuedPages.delete(page)
           consecutiveFailedAttempts = 0
           updateGlobalSnapshotProgress()
         }
 
-        appendUpdatePageResult(1, firstPageResult)
-        for (let page = 2; page <= totalPages && duplicateIdCount <= 20 && !shouldStop(); page += 1) {
-          const result = await fetchUpdatePageWithRetry(page)
-          if (result === undefined) {
-            break
+        function applyUpdatePageResultsInOrder(pages: number[], results: Map<number, SearchResult>) {
+          for (const pageNum of pages) {
+            if (duplicateIdCount > duplicateStopLimit) {
+              return false
+            }
+            const result = results.get(pageNum)
+            if (result !== undefined) {
+              appendUpdatePageResult(pageNum, result)
+            }
           }
-          appendUpdatePageResult(page, result)
+          return duplicateIdCount <= duplicateStopLimit
         }
-        clearGlobalSnapshotProgress()
+
+        appendUpdatePageResult(1, firstPageResult)
+        const duplicateStopLimit = globalSnapshotIdUpdateDuplicateLimit.value
+
+        async function collectUpdatePacedPages(startPage: number, endPage: number) {
+          for (let scanPage = startPage; scanPage <= endPage; scanPage += 1) {
+            if (duplicateIdCount > duplicateStopLimit || shouldStop()) {
+              return false
+            }
+            const continued = await sleepUnlessCancelled(randomInt(500, 1500), shouldStop)
+            if (!continued || shouldStop()) {
+              return false
+            }
+            const result = await fetchUpdatePageForScan(scanPage)
+            if (result === undefined) {
+              if (shouldStop()) {
+                return false
+              }
+              continue
+            }
+            appendUpdatePageResult(scanPage, result)
+            if (duplicateIdCount > duplicateStopLimit) {
+              return false
+            }
+          }
+          return true
+        }
+
+        async function collectUpdateParallelPages(startPage: number, endPage: number) {
+          if (startPage > endPage || shouldStop()) {
+            return !shouldStop()
+          }
+          const pages = Array.from({ length: endPage - startPage + 1 }, (_, index) => startPage + index)
+          const pageResults = await Promise.all(
+            pages.map(async (scanPage) => ({
+              page: scanPage,
+              result: await fetchUpdatePageForScan(scanPage),
+            })),
+          )
+          if (shouldStop()) {
+            return false
+          }
+          for (const { page: scanPage, result } of pageResults.sort((a, b) => a.page - b.page)) {
+            if (duplicateIdCount > duplicateStopLimit) {
+              return false
+            }
+            if (result === undefined) {
+              continue
+            }
+            appendUpdatePageResult(scanPage, result)
+            if (duplicateIdCount > duplicateStopLimit) {
+              return false
+            }
+          }
+          return !shouldStop()
+        }
+
+        if (globalSnapshotScanMode.value === 'aggressive') {
+          let page = 2
+          let retryPages: number[] = []
+          let skipNextAggressiveBatchSend = false
+          while (page <= totalPages && duplicateIdCount <= duplicateStopLimit && !shouldStop()) {
+            const isRetryBatch = retryPages.length > 0
+            const batchSize = isRetryBatch ? retryPages.length : randomInt(100, 200)
+            const startPage = isRetryBatch ? Math.min(...retryPages) : page
+            const endPage = isRetryBatch ? Math.max(...retryPages) : Math.min(totalPages, page + batchSize - 1)
+            const pagesToScan = isRetryBatch
+              ? retryPages
+              : Array.from({ length: endPage - startPage + 1 }, (_, index) => startPage + index)
+            retryPages = []
+
+            if (pagesToScan.length === 0) {
+              break
+            }
+
+            if (skipNextAggressiveBatchSend) {
+              skipNextAggressiveBatchSend = false
+            } else if (!(await waitAggressiveBatchSend(pagesToScan))) {
+              break
+            }
+
+            const outcome = await collectAggressiveUpdatePages(pagesToScan)
+            const orderedPages = [...pagesToScan].sort((a, b) => a - b)
+            if (!applyUpdatePageResultsInOrder(orderedPages, outcome.results)) {
+              break
+            }
+            await flushGlobalSnapshotBatch()
+
+            if (outcome.challenged) {
+              const cfPages = outcome.failedPages.length > 0 ? outcome.failedPages : pagesToScan
+              if (!(await waitGlobalManualRequest(Math.min(...cfPages), Math.max(...cfPages)))) {
+                break
+              }
+              skipNextAggressiveBatchSend = true
+              retryPages = outcome.failedPages.filter((item) => !completedPages.has(item))
+              continue
+            }
+            if (!(await waitConsecutiveFailureCooldown())) {
+              break
+            }
+
+            if (outcome.failedPages.length > 0) {
+              retryPages = outcome.failedPages.filter((item) => !completedPages.has(item))
+              continue
+            }
+
+            page = endPage + 1
+          }
+        } else {
+          let page = 2
+          let useParallel = false
+          while (page <= totalPages && duplicateIdCount <= duplicateStopLimit && !shouldStop()) {
+            const span = useParallel ? randomInt(30, 40) : randomInt(10, 30)
+            const endPage = Math.min(totalPages, page + span - 1)
+            const completedBatch = useParallel
+              ? await collectUpdateParallelPages(page, endPage)
+              : await collectUpdatePacedPages(page, endPage)
+            if (!completedBatch || duplicateIdCount > duplicateStopLimit) {
+              break
+            }
+            await flushGlobalSnapshotBatch()
+            if (!(await waitConsecutiveFailureCooldown())) {
+              break
+            }
+            page = endPage + 1
+            useParallel = !useParallel
+          }
+        }
+        await flushGlobalSnapshotBatch()
         if (shouldStop()) {
+          clearGlobalSnapshotProgress()
           return updateBaseMeta
         }
+        const updateBaseWasComplete = isSnapshotScanComplete(updateBaseMeta)
+        const comicsToSave = batchComics
+        batchComics = []
+        persistedSnapshotMeta = await upsertGlobalSnapshot(
+          updateBaseMeta,
+          target,
+          comicsToSave,
+          totalPages,
+          updateBaseWasComplete ? 100 : clampScanCompletionPercent((completedPages.size / Math.max(totalPages, 1)) * 100),
+          updateBaseWasComplete ? totalPages : completedPages.size,
+          updateBaseWasComplete && totalPages > 0
+            ? [{ start: 1, end: totalPages }]
+            : pageRangesFromSet(completedPages),
+        )
+        await finalizeSnapshotScan(false)
+        const finalizedMeta = persistedSnapshotMeta ?? updateBaseMeta
+        clearGlobalSnapshotProgress()
+        if (shouldStop()) {
+          return finalizedMeta
+        }
         if (addedComicIds.size === 0) {
-          if (isSnapshotScanComplete(updateBaseMeta)) {
-            await finishGlobalSnapshotWebsiteExport(target, updateBaseMeta, {
+          if (isSnapshotScanComplete(finalizedMeta)) {
+            await finishGlobalSnapshotWebsiteExport(target, finalizedMeta, {
               addedCount: 0,
               openTabOnComplete,
             })
           } else {
             message.success(`${target.label}快照已是最新，無須更新`)
           }
-          return updateBaseMeta
+          return finalizedMeta
         }
-        const comicsToSave = batchComics
-        batchComics = []
-        const updatedMeta = await upsertGlobalSnapshot(
-          updateBaseMeta,
-          target,
-          comicsToSave,
-          totalPages,
-          100,
-          totalPages,
-          totalPages > 0 ? [{ start: 1, end: totalPages }] : [],
-        )
-        const updatedRecord = await getGlobalSnapshotRecord(updatedMeta.id)
-        if (updatedRecord !== undefined) {
-          await putGlobalSnapshotRecord({ id: updatedMeta.id, comics: sortedUniqueComicsById(updatedRecord.comics) })
-        }
-        await finishGlobalSnapshotWebsiteExport(target, updatedMeta, {
+        await finishGlobalSnapshotWebsiteExport(target, finalizedMeta, {
           addedCount: addedComicIds.size,
           openTabOnComplete,
         })
-        return updatedMeta
+        return finalizedMeta
       }
 
       if (updateBaseMeta !== undefined) {
@@ -3305,26 +3932,31 @@ export default defineComponent({
       if (globalSnapshotScanMode.value === 'aggressive') {
         let page = resumeStartPage
         let retryPages: number[] = []
+        let skipNextAggressiveBatchSend = false
         while (page >= 1 && !shouldStop()) {
           const isRetryBatch = retryPages.length > 0
           const batchSize = isRetryBatch ? retryPages.length : randomInt(100, 200)
           const startPage = isRetryBatch ? Math.min(...retryPages) : Math.max(1, page - batchSize + 1)
           const endPage = isRetryBatch ? Math.max(...retryPages) : page
-          if (globalSnapshotPauseReason.value !== null && !(await waitGlobalManualRequest(startPage, endPage))) {
-            break
-          }
           const pagesToScan = isRetryBatch
             ? retryPages
             : Array.from({ length: Math.max(0, endPage - Math.max(2, startPage) + 1) }, (_, index) => endPage - index)
           retryPages = []
           if (pagesToScan.length > 0) {
-            if (!(await waitAggressiveBatchSend(pagesToScan))) {
+            if (skipNextAggressiveBatchSend) {
+              skipNextAggressiveBatchSend = false
+            } else if (!(await waitAggressiveBatchSend(pagesToScan))) {
               break
             }
             const outcome = await collectAggressivePages(pagesToScan)
             retryPages = outcome.failedPages
             await flushGlobalSnapshotBatch()
             if (outcome.challenged) {
+              const cfPages = outcome.failedPages.length > 0 ? outcome.failedPages : pagesToScan
+              if (!(await waitGlobalManualRequest(Math.min(...cfPages), Math.max(...cfPages)))) {
+                break
+              }
+              skipNextAggressiveBatchSend = true
               continue
             }
             if (!(await waitConsecutiveFailureCooldown())) {
@@ -3358,7 +3990,7 @@ export default defineComponent({
         await flushGlobalSnapshotBatch()
       } else {
         let page = resumeStartPage
-        let useParallel = Math.random() >= 0.5
+        let useParallel = false
         while (page >= 2 && !shouldStop()) {
           const conservative = globalSnapshotScanMode.value === 'conservative'
           const span = useParallel
@@ -3387,7 +4019,12 @@ export default defineComponent({
         await flushGlobalSnapshotBatch()
       }
 
-      const meta = await flushGlobalSnapshotBatch()
+      if (!shouldStop()) {
+        await flushGlobalSnapshotBatch()
+        await finalizeSnapshotScan(true)
+      }
+
+      const meta = persistedSnapshotMeta
       clearGlobalSnapshotProgress()
       if (meta === null || meta.totalCount === 0) {
         message.error(`${target.label}快照沒有可保存的資料`)
@@ -3399,9 +4036,7 @@ export default defineComponent({
       if (isSnapshotScanComplete(meta) && !globalSnapshotCancelled) {
         const websitePath = await exportGlobalSnapshotToWebsite(meta)
         if (websitePath !== null) {
-          message.success(
-            `${globalSnapshotLabel(meta)} 已導出至 Website Snapshot（舊檔已移至 old 資料夾）`,
-          )
+          message.success(`${globalSnapshotLabel(meta)} 已導出至 Website Snapshot（舊檔已刪除）`)
         }
       }
       if (openTabOnComplete) {
@@ -3464,9 +4099,6 @@ export default defineComponent({
         message.warning('請至少選擇一個要接續的快照')
         return undefined
       }
-      if (!(await confirmGlobalSnapshotScan('resume'))) {
-        return undefined
-      }
 
       const strategy = globalSnapshotResumeStrategy.value
       let lastMeta: GlobalSnapshotMeta | undefined
@@ -3524,7 +4156,11 @@ export default defineComponent({
       }
       globalSnapshotResumeShowing.value = false
       store.currentTabName = 'search'
-      void resumeGlobalSnapshotsInQueue()
+      prepareGlobalSnapshotResumeScan()
+      message.info('正在開始接續掃描…')
+      void runExclusiveSearch(async () => {
+        await resumeGlobalSnapshotsInQueue()
+      })
     }
 
     function saveActiveScopedScanCache() {
@@ -6120,6 +6756,8 @@ export default defineComponent({
 
         <NModal
           show={globalSnapshotResumeShowing.value}
+          zIndex={20000}
+          maskClosable={false}
           onUpdate:show={(v) => {
             if (!v) {
               resolveGlobalSnapshotResume(false)
@@ -6140,6 +6778,7 @@ export default defineComponent({
                 return false
               }
               resolveGlobalSnapshotResume(true)
+              return true
             }}
             onClose={() => resolveGlobalSnapshotResume(false)}>
             <div class="flex flex-col gap-2 text-sm">
@@ -6174,39 +6813,118 @@ export default defineComponent({
                   )
                 })}
               </div>
-              {globalSnapshotResumeHasIncompleteSelection.value ? (
-                  <div class="flex flex-col gap-2 rounded border border-[var(--n-border-color)] px-3 py-2">
-                    <span class="font-medium opacity-90">接續方式</span>
-                    <NRadioGroup
-                      value={globalSnapshotResumeStrategy.value}
-                      onUpdate:value={(value) => {
-                        if (value === 'page' || value === 'idUpdate') {
-                          globalSnapshotResumeStrategy.value = value
-                        }
-                      }}>
-                      <div class="flex flex-col gap-1.5">
-                        <NRadio value="page">
-                          <div class="flex flex-col leading-relaxed">
-                            <span>頁碼接續</span>
-                            <span class="text-xs opacity-70">從斷點與待補掃頁繼續，適合剛中斷後馬上接續。</span>
-                          </div>
-                        </NRadio>
-                        <NRadio value="idUpdate">
-                          <div class="flex flex-col leading-relaxed">
-                            <span>ID 更新式接續</span>
-                            <span class="text-xs opacity-70">從第 1 頁掃到超過 20 個重複 ID，適合隔一段時間後接續。</span>
-                          </div>
-                        </NRadio>
+              <div class="flex flex-col gap-2 rounded border border-[var(--n-border-color)] px-3 py-2">
+                <span class="font-medium opacity-90">掃描模式</span>
+                <div class="flex flex-col gap-2">
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    class={
+                      globalSnapshotScanMode.value === 'conservative'
+                        ? 'cursor-pointer rounded border border-blue-500 bg-blue-500/10 px-3 py-2'
+                        : 'cursor-pointer rounded border border-[var(--n-border-color)] px-3 py-2 hover:border-blue-400/60'
+                    }
+                    onClick={() => selectGlobalSnapshotScanMode('conservative')}
+                    onKeydown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        selectGlobalSnapshotScanMode('conservative')
+                      }
+                    }}>
+                    <div class="font-medium">保守模式</div>
+                    {globalSnapshotResumeStrategy.value === 'idUpdate' && (
+                      <div class="text-xs opacity-70 mt-0.5">
+                        ID 更新：模擬手點（10～30 頁／批，間隔 500～1500 ms）與並行請求（30～40
+                        頁／批）交替進行；首輪必為模擬手點；遇 Cloudflare 挑戰等待 20 秒重試。
                       </div>
-                    </NRadioGroup>
+                    )}
                   </div>
-              ) : null}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    class={
+                      globalSnapshotScanMode.value === 'aggressive'
+                        ? 'cursor-pointer rounded border border-blue-500 bg-blue-500/10 px-3 py-2'
+                        : 'cursor-pointer rounded border border-[var(--n-border-color)] px-3 py-2 hover:border-blue-400/60'
+                    }
+                    onClick={() => selectGlobalSnapshotScanMode('aggressive')}
+                    onKeydown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        selectGlobalSnapshotScanMode('aggressive')
+                      }
+                    }}>
+                    <div class="font-medium">激進模式(搭配VPN使用)</div>
+                    {globalSnapshotResumeStrategy.value === 'idUpdate' && (
+                      <div class="text-xs opacity-70 mt-0.5">ID 更新：每批 100～200 頁並行請求（與全量快照激進相同）。</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div class="flex flex-col gap-2 rounded border border-[var(--n-border-color)] px-3 py-2">
+                <span class="font-medium opacity-90">接續方式</span>
+                <div class="flex flex-col gap-2">
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    class={
+                      globalSnapshotResumeStrategy.value === 'page'
+                        ? 'cursor-pointer rounded border border-blue-500 bg-blue-500/10 px-3 py-2'
+                        : 'cursor-pointer rounded border border-[var(--n-border-color)] px-3 py-2 hover:border-blue-400/60'
+                    }
+                    onClick={() => selectGlobalSnapshotResumeStrategy('page')}
+                    onKeydown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        selectGlobalSnapshotResumeStrategy('page')
+                      }
+                    }}>
+                    <div class="font-medium">頁碼接續</div>
+                    <div class="text-xs opacity-70 mt-0.5">從斷點與待補掃頁繼續，適合剛中斷後馬上接續。</div>
+                  </div>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    class={
+                      globalSnapshotResumeStrategy.value === 'idUpdate'
+                        ? 'cursor-pointer rounded border border-blue-500 bg-blue-500/10 px-3 py-2'
+                        : 'cursor-pointer rounded border border-[var(--n-border-color)] px-3 py-2 hover:border-blue-400/60'
+                    }
+                    onClick={() => selectGlobalSnapshotResumeStrategy('idUpdate')}
+                    onKeydown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        selectGlobalSnapshotResumeStrategy('idUpdate')
+                      }
+                    }}>
+                    <div class="font-medium">ID 更新式接續</div>
+                    <div class="text-xs opacity-70 mt-0.5">從第 1 頁開始掃描，遇到已存在 ID 即略過，適合隔一段時間後接續。</div>
+                    {globalSnapshotResumeStrategy.value === 'idUpdate' && (
+                      <div
+                        class="flex items-center gap-2 flex-wrap mt-2 pt-2 border-t border-[var(--n-border-color)]"
+                        onClick={(event) => event.stopPropagation()}>
+                        <span class="text-xs opacity-70 shrink-0">超過</span>
+                        <NInputNumber
+                          size="tiny"
+                          class="w-24"
+                          min={0}
+                          precision={0}
+                          value={globalSnapshotIdUpdateDuplicateLimit.value}
+                          onUpdate:value={(value) => {
+                            const next = normalizeGlobalSnapshotIdUpdateDuplicateLimit(value)
+                            globalSnapshotIdUpdateDuplicateLimit.value = next
+                            saveGlobalSnapshotIdUpdateDuplicateLimit(next)
+                          }}
+                        />
+                        <span class="text-xs opacity-70">個重複 ID 時停止</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           </NDialog>
         </NModal>
 
         <NModal
           show={globalSnapshotConfirmShowing.value}
+          zIndex={20000}
           onUpdate:show={(v) => !v && resolveGlobalSnapshotConfirm(false)}>
           <NDialog
             showIcon={false}
@@ -6283,7 +7001,7 @@ export default defineComponent({
           </Teleport>
         )}
 
-        {globalSnapshotKeywordSearchProgress.value !== null && (
+        {globalSnapshotKeywordSearchProgress.value !== null && !isGlobalSnapshotDialogOpen.value && (
           <Teleport to="body">
             <div class="fixed inset-0 z-[9998] flex items-center justify-center bg-black/55">
               <div class="flex flex-col items-center gap-4 px-8 py-6 rounded-xl bg-[#2a2a2a] border border-[rgba(255,255,255,0.14)] shadow-xl min-w-80 max-w-[92vw]">
@@ -6305,7 +7023,7 @@ export default defineComponent({
           </Teleport>
         )}
 
-        {koreanModeLoadProgress.value !== null && (
+        {koreanModeLoadProgress.value !== null && !isGlobalSnapshotDialogOpen.value && (
           <Teleport to="body">
             <div class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/55">
               <div class="flex flex-col items-center gap-4 px-8 py-6 rounded-xl bg-[#2a2a2a] border border-[rgba(255,255,255,0.14)] shadow-xl min-w-80 max-w-[92vw]">

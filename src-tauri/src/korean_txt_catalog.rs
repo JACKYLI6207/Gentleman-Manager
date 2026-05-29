@@ -124,6 +124,22 @@ fn resolve_append_target_file(config_value: &str) -> anyhow::Result<std::path::P
     ))
 }
 
+/// 追加新行前與既有內容之間保留一個空行。
+fn write_blank_line_separator<W: std::io::Write>(writer: &mut W, existing: &str) -> std::io::Result<()> {
+    if existing.is_empty() {
+        return Ok(());
+    }
+    if existing.ends_with("\n\n") || existing.ends_with("\n\r\n") {
+        return Ok(());
+    }
+    if existing.ends_with('\n') {
+        writer.write_all(b"\n")?;
+    } else {
+        writer.write_all(b"\n\n")?;
+    }
+    Ok(())
+}
+
 /// 將韓漫系列資料夾名稱追加到 TXT 列表（若該行尚不存在）。
 pub fn append_folder_line_to_catalog(
     config_value: &str,
@@ -134,19 +150,18 @@ pub fn append_folder_line_to_catalog(
         return Ok(false);
     }
     let target = resolve_append_target_file(config_value)?;
-    let existing = read_lines_from_txt_file(&target).unwrap_or_default();
-    if existing.iter().any(|line| line.trim() == trimmed) {
+    let existing_lines = read_lines_from_txt_file(&target).unwrap_or_default();
+    if existing_lines.iter().any(|line| line.trim() == trimmed) {
         return Ok(false);
     }
+    let existing_raw = std::fs::read_to_string(&target).unwrap_or_default();
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&target)
         .with_context(|| format!("無法開啟 TXT 檔 `{}`", target.display()))?;
-    if !existing.is_empty() && !existing.last().is_some_and(|s| s.is_empty()) {
-        file.write_all(b"\n")?;
-    }
+    write_blank_line_separator(&mut file, &existing_raw)?;
     writeln!(file, "{trimmed}")?;
     tracing::info!(path = %target.display(), line = trimmed, "已追加韓漫收藏列表");
     Ok(true)
@@ -156,6 +171,16 @@ pub fn append_folder_line_to_catalog(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn append_inserts_blank_line_before_new_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("list.txt");
+        std::fs::write(&path, "5星06. 傀儡-1~345-完\n").unwrap();
+        assert!(append_folder_line_to_catalog(&path.to_string_lossy(), "新作-1~10-完").unwrap());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("5星06. 傀儡-1~345-完\n\n新作-1~10-完"));
+    }
 
     #[test]
     fn read_catalog_lines_reads_txt_files() {

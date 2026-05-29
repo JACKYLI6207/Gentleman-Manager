@@ -642,27 +642,8 @@ fn website_snapshot_file_prefix(file_name: &str) -> &str {
     stem
 }
 
-fn unique_old_snapshot_path(old_dir: &std::path::Path, file_name: &str) -> PathBuf {
-    let candidate = old_dir.join(file_name);
-    if !candidate.exists() {
-        return candidate;
-    }
-    let stem = file_name
-        .strip_suffix(".gm-snapshot.json")
-        .unwrap_or(file_name);
-    for index in 1.. {
-        let candidate = old_dir.join(format!("{stem} ({index}).gm-snapshot.json"));
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    unreachable!("unique snapshot path loop should always return")
-}
-
-fn archive_existing_website_snapshots(snapshot_dir: &std::path::Path, file_name: &str) -> anyhow::Result<()> {
+fn replace_existing_website_snapshots(snapshot_dir: &std::path::Path, file_name: &str) -> anyhow::Result<()> {
     let prefix = website_snapshot_file_prefix(file_name);
-    let mut old_dir_created = false;
-    let old_dir = snapshot_dir.join("old");
     for entry in std::fs::read_dir(snapshot_dir)
         .context(format!("讀取 Website Snapshot 目錄`{}`失敗", snapshot_dir.display()))?
     {
@@ -677,23 +658,21 @@ fn archive_existing_website_snapshots(snapshot_dir: &std::path::Path, file_name:
         if website_snapshot_file_prefix(&existing_name) != prefix {
             continue;
         }
-        if !old_dir_created {
-            std::fs::create_dir_all(&old_dir)
-                .context(format!("建立 Website Snapshot old 目錄`{}`失敗", old_dir.display()))?;
-            old_dir_created = true;
-        }
-        let destination = unique_old_snapshot_path(&old_dir, &existing_name);
-        std::fs::rename(entry.path(), &destination).or_else(|_| {
-            std::fs::copy(entry.path(), &destination)?;
-            std::fs::remove_file(entry.path())
-        })?;
+        std::fs::remove_file(entry.path()).context(format!(
+            "刪除 Website Snapshot 舊檔`{}`失敗",
+            entry.path().display()
+        ))?;
     }
     Ok(())
 }
 
 #[tauri::command(async)]
 #[specta::specta]
-pub fn write_snapshot_website_file(file_name: &str, content: &str) -> CommandResult<String> {
+pub fn write_snapshot_website_file(
+    file_name: &str,
+    content: &str,
+    _delete_previous: Option<bool>,
+) -> CommandResult<String> {
     let file_name = safe_output_file_name(file_name)
         .map_err(|err| CommandError::from("建立 Website Snapshot 檔名失敗", err))?;
     let snapshot_dir = exe_base_dir()
@@ -702,8 +681,8 @@ pub fn write_snapshot_website_file(file_name: &str, content: &str) -> CommandRes
     std::fs::create_dir_all(&snapshot_dir)
         .context(format!("建立 Website Snapshot 目錄`{}`失敗", snapshot_dir.display()))
         .map_err(|err| CommandError::from("建立 Website Snapshot 目錄失敗", err))?;
-    archive_existing_website_snapshots(&snapshot_dir, &file_name)
-        .map_err(|err| CommandError::from("移置 Website Snapshot 舊檔失敗", err))?;
+    replace_existing_website_snapshots(&snapshot_dir, &file_name)
+        .map_err(|err| CommandError::from("刪除 Website Snapshot 舊檔失敗", err))?;
     let path = snapshot_dir.join(file_name);
     std::fs::write(&path, content)
         .context(format!("寫入 Website Snapshot 檔案`{}`失敗", path.display()))

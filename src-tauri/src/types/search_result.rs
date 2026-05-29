@@ -30,8 +30,12 @@ impl SearchResult {
 
         let mut comics = Vec::new();
         for comic_li in document.select(&comic_li_selector) {
-            let comic = ComicInSearch::from_li(app, &comic_li)?;
-            comics.push(comic);
+            match ComicInSearch::from_li(app, &comic_li) {
+                Ok(comic) => comics.push(comic),
+                Err(err) => {
+                    tracing::warn!(error = %err, "列表項目解析失敗，略過");
+                }
+            }
         }
 
         let current_page = match document
@@ -50,10 +54,14 @@ impl SearchResult {
         };
 
         let (total_page, total_count) = if is_search_by_tag {
-            let total_page = parse_album_list_total_page(&document, current_page);
-            let per_page = comics.len().max(1) as i64;
-            let total_count = total_page * per_page;
-            (total_page, total_count)
+            const PAGE_SIZE: i64 = 20;
+            let paginator_page = parse_album_list_total_page(&document, current_page);
+            if let Some(exact) = try_parse_list_total_count(&document) {
+                let total_page = ((exact + PAGE_SIZE - 1) / PAGE_SIZE).max(1);
+                (total_page, exact)
+            } else {
+                finalize_album_list_totals(comics.len(), current_page, paginator_page, PAGE_SIZE)
+            }
         } else {
             const PAGE_SIZE: i64 = 20;
             let document_html = document.html();
@@ -72,6 +80,12 @@ impl SearchResult {
                 .parse::<i64>()
                 .context(format!("總結果數不是整數: {b_html}"))?;
             let total_page = (total_count + PAGE_SIZE - 1) / PAGE_SIZE;
+            (total_page, total_count)
+        };
+
+        let (total_page, total_count) = if comics.is_empty() {
+            (1, 0)
+        } else {
             (total_page, total_count)
         };
 
@@ -326,6 +340,32 @@ mod ranking_total_tests {
     }
 }
 
+#[cfg(test)]
+mod album_list_total_tests {
+    use super::*;
+
+    #[test]
+    fn finalize_album_list_totals_last_page() {
+        let (page, count) = finalize_album_list_totals(8, 2, 2, 20);
+        assert_eq!(count, 28);
+        assert_eq!(page, 2);
+    }
+
+    #[test]
+    fn finalize_album_list_totals_single_page() {
+        let (page, count) = finalize_album_list_totals(28, 1, 1, 20);
+        assert_eq!(count, 28);
+        assert_eq!(page, 2);
+    }
+
+    #[test]
+    fn finalize_album_list_totals_middle_page() {
+        let (page, count) = finalize_album_list_totals(20, 1, 5, 20);
+        assert_eq!(count, 100);
+        assert_eq!(page, 5);
+    }
+}
+
 fn parse_ranking_total_page(document: &Html, current_page: i64) -> i64 {
     let Ok(selector) = Selector::parse(".f_left.paginator > a") else {
         return current_page;
@@ -371,6 +411,33 @@ fn parse_album_list_total_page(document: &Html, current_page: i64) -> i64 {
     }
 
     max_page
+}
+
+fn try_parse_list_total_count(document: &Html) -> Option<i64> {
+    let selector = Selector::parse("#bodywrap .result > b").ok()?;
+    let b = document.select(&selector).next()?;
+    let text = b.text().next()?;
+    let n: i64 = text.replace(',', "").trim().parse().ok()?;
+    if n > 0 { Some(n) } else { None }
+}
+
+fn finalize_album_list_totals(
+    comics_on_page: usize,
+    current_page: i64,
+    total_page: i64,
+    page_size: i64,
+) -> (i64, i64) {
+    let mut total_page = total_page.max(current_page).max(1);
+    let on_page = comics_on_page as i64;
+    let mut total_count = if on_page < page_size || current_page >= total_page {
+        (current_page - 1).max(0) * page_size + on_page
+    } else {
+        total_page * page_size
+    };
+    if total_page <= 1 && total_count > page_size {
+        total_page = (total_count + page_size - 1) / page_size;
+    }
+    (total_page, total_count)
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, Type)]

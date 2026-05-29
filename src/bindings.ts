@@ -274,9 +274,16 @@ export const commands = {
       else return { status: 'error', error: e as any }
     }
   },
-  async writeSnapshotWebsiteFile(fileName: string, content: string): Promise<Result<string, CommandError>> {
+  async writeSnapshotWebsiteFile(
+    fileName: string,
+    content: string,
+    deletePrevious?: boolean,
+  ): Promise<Result<string, CommandError>> {
     try {
-      return { status: 'ok', data: await TAURI_INVOKE('write_snapshot_website_file', { fileName, content }) }
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('write_snapshot_website_file', { fileName, content, deletePrevious }),
+      }
     } catch (e) {
       if (e instanceof Error) throw e
       else return { status: 'error', error: e as any }

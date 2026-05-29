@@ -209,14 +209,33 @@ export function extractCatalogLineNameCandidates(line: string): string[] {
   return out
 }
 
+type CatalogLineIndexEntry = {
+  line: string
+  lineNames: string[]
+}
+
+/** 預處理 TXT 列候選名，避免本頁比對時重複解析同一行 */
+export function buildCatalogLineIndex(catalogLines: string[]): CatalogLineIndexEntry[] {
+  const index: CatalogLineIndexEntry[] = []
+  for (const line of catalogLines) {
+    if (isIgnorableCatalogLine(line)) {
+      continue
+    }
+    const lineNames = extractCatalogLineNameCandidates(line)
+    if (lineNames.length > 0) {
+      index.push({ line, lineNames })
+    }
+  }
+  return index
+}
+
 /** 系列名與目錄列是否匹配：兩側提取候選名，任一精確相等或目錄名包含系列名 */
-function seriesNameMatchesCatalogLine(seriesName: string, line: string): boolean {
+function seriesNameMatchesCatalogLineNames(seriesName: string, lineNames: string[]): boolean {
   const nameForms = comparableForms(seriesName)
   if (nameForms.length === 0) {
     return false
   }
 
-  const lineNames = extractCatalogLineNameCandidates(line)
   if (lineNames.length === 0) {
     return false
   }
@@ -252,6 +271,10 @@ function seriesNameMatchesCatalogLine(seriesName: string, line: string): boolean
   return false
 }
 
+function seriesNameMatchesCatalogLine(seriesName: string, line: string): boolean {
+  return seriesNameMatchesCatalogLineNames(seriesName, extractCatalogLineNameCandidates(line))
+}
+
 /**
  * TXT 條目是否包含系列名（繁簡轉換後）。
  * 保留舊 API，內部改用雙向候選名比對。
@@ -275,19 +298,23 @@ function findMatchingCatalogLines(candidates: string[], catalogLines: string[]):
   return matches
 }
 
-function findFirstCatalogMatch(candidates: string[], catalogLines: string[]): string | undefined {
+function findFirstCatalogMatchIndexed(
+  candidates: string[],
+  catalogIndex: CatalogLineIndexEntry[],
+): string | undefined {
   const ordered = [...candidates].sort(
     (a, b) => extractComparableText(a).length - extractComparableText(b).length,
   )
-  for (const line of catalogLines) {
-    if (isIgnorableCatalogLine(line)) {
-      continue
-    }
-    if (ordered.some((name) => seriesNameMatchesCatalogLine(name, line))) {
-      return line
+  for (const entry of catalogIndex) {
+    if (ordered.some((name) => seriesNameMatchesCatalogLineNames(name, entry.lineNames))) {
+      return entry.line
     }
   }
   return undefined
+}
+
+function findFirstCatalogMatch(candidates: string[], catalogLines: string[]): string | undefined {
+  return findFirstCatalogMatchIndexed(candidates, buildCatalogLineIndex(catalogLines))
 }
 
 export function formatDuplicateMessage(catalogLine: string): string {
@@ -386,23 +413,46 @@ export function analyzeKoreanTxtDuplicates(
   }
 }
 
-/** 搜尋結果本頁：以各漫畫標題候選名比對 TXT 目錄 */
-export function analyzePageCatalogDuplicates(
-  comics: ComicInSearch[],
+export type CatalogCompareContext = {
+  catalogIndex: CatalogLineIndexEntry[]
+  normalizedPageTag?: string
+}
+
+/** 預建 TXT 索引，供分批比對時重複使用 */
+export function createCatalogCompareContext(
   catalogLines: string[],
   options?: { tagLabel?: string },
-): Map<number, string> {
-  const normalizedPageTag = normalizePageTagLabel(options?.tagLabel)
-  const validLines = catalogLines.filter((line) => !isIgnorableCatalogLine(line))
-  const results = new Map<number, string>()
+): CatalogCompareContext {
+  return {
+    catalogIndex: buildCatalogLineIndex(catalogLines),
+    normalizedPageTag: normalizePageTagLabel(options?.tagLabel),
+  }
+}
 
+export function analyzeComicsWithCatalogContext(
+  comics: ComicInSearch[],
+  ctx: CatalogCompareContext,
+): Map<number, string> {
+  const results = new Map<number, string>()
   for (const comic of comics) {
-    const candidates = expandLabelCandidates(...seriesNameCandidatesFromTitle(comic.title), normalizedPageTag)
-    const matchedLine = findFirstCatalogMatch(candidates, validLines)
+    const candidates = expandLabelCandidates(
+      ...seriesNameCandidatesFromTitle(comic.title),
+      ctx.normalizedPageTag,
+    )
+    const matchedLine = findFirstCatalogMatchIndexed(candidates, ctx.catalogIndex)
     results.set(
       comic.id,
       matchedLine !== undefined ? formatDuplicateMessage(matchedLine) : CATALOG_NO_DUPLICATE_MESSAGE,
     )
   }
   return results
+}
+
+/** 搜尋結果本頁：以各漫畫標題候選名比對 TXT 目錄 */
+export function analyzePageCatalogDuplicates(
+  comics: ComicInSearch[],
+  catalogLines: string[],
+  options?: { tagLabel?: string },
+): Map<number, string> {
+  return analyzeComicsWithCatalogContext(comics, createCatalogCompareContext(catalogLines, options))
 }
