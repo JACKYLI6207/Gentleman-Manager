@@ -339,7 +339,7 @@ export default defineComponent({
     const globalSnapshotManualRequest = ref<{ startPage: number; endPage: number } | null>(null)
     const globalSnapshotPauseReason = ref<string | null>(null)
     const globalSnapshotResumeShowing = ref<boolean>(false)
-    const globalSnapshotResumeSelectedId = ref<string | null>(null)
+    const globalSnapshotResumeSelectedIds = ref<string[]>([])
     const globalSnapshotResumeStrategy = ref<GlobalSnapshotResumeStrategy>('page')
     const globalSnapshotStartedAt = ref<number | null>(null)
     const globalSnapshotElapsedTick = ref(Date.now())
@@ -2676,6 +2676,38 @@ export default defineComponent({
       return result.data
     }
 
+    async function exportGlobalSnapshotToWebsite(meta: GlobalSnapshotMeta) {
+      return writeSortedGlobalSnapshotCalibration(meta)
+    }
+
+    async function finishGlobalSnapshotWebsiteExport(
+      target: SnapshotScanTarget,
+      meta: GlobalSnapshotMeta,
+      options: { addedCount: number; openTabOnComplete: boolean },
+    ) {
+      if (options.openTabOnComplete) {
+        await loadGlobalSnapshot(meta, true)
+      }
+      const websitePath = await exportGlobalSnapshotToWebsite(meta)
+      if (options.addedCount <= 0) {
+        if (websitePath !== null) {
+          message.success(
+            `${target.label}快照已是最新，無須更新；已同步導出至 Website Snapshot（舊檔已移至 old 資料夾）`,
+          )
+        } else {
+          message.success(`${target.label}快照已是最新，無須更新`)
+        }
+        return
+      }
+      if (websitePath !== null) {
+        message.success(
+          `${target.label}快照已更新至最新（新增 ${options.addedCount} 本）；已導出至 Website Snapshot（舊檔已移至 old 資料夾）`,
+        )
+      } else {
+        message.warning(`${target.label}快照已更新（新增 ${options.addedCount} 本），但導出 Website Snapshot 失敗`)
+      }
+    }
+
     function resolveGlobalSnapshotConfirm(confirmed: boolean) {
       globalSnapshotConfirmShowing.value = false
       const resolve = globalSnapshotConfirmResolve
@@ -2732,7 +2764,9 @@ export default defineComponent({
         }
         let meta: GlobalSnapshotMeta | undefined
         try {
-          meta = await scanGlobalSnapshotTarget(target, mode === 'update' ? undefined : resumeMeta, updateBaseMeta)
+          meta = await scanGlobalSnapshotTarget(target, mode === 'update' ? undefined : resumeMeta, updateBaseMeta, {
+            openTabOnComplete: mode !== 'resume',
+          })
         } catch (err) {
           console.error(err)
           clearGlobalSnapshotProgress()
@@ -2752,7 +2786,9 @@ export default defineComponent({
       target: SnapshotScanTarget,
       resumeMeta?: GlobalSnapshotMeta,
       updateBaseMeta?: GlobalSnapshotMeta,
+      options?: { openTabOnComplete?: boolean },
     ) {
+      const openTabOnComplete = options?.openTabOnComplete !== false
       globalSnapshotCancelled = false
       globalSnapshotScanningLabel.value = updateBaseMeta === undefined ? `${target.label}快照` : `${target.label}更新快照`
       globalSnapshotStartedAt.value = Date.now()
@@ -3230,7 +3266,14 @@ export default defineComponent({
           return updateBaseMeta
         }
         if (addedComicIds.size === 0) {
-          message.success(`${target.label}快照已是最新，無須更新`)
+          if (isSnapshotScanComplete(updateBaseMeta)) {
+            await finishGlobalSnapshotWebsiteExport(target, updateBaseMeta, {
+              addedCount: 0,
+              openTabOnComplete,
+            })
+          } else {
+            message.success(`${target.label}快照已是最新，無須更新`)
+          }
           return updateBaseMeta
         }
         const comicsToSave = batchComics
@@ -3248,11 +3291,10 @@ export default defineComponent({
         if (updatedRecord !== undefined) {
           await putGlobalSnapshotRecord({ id: updatedMeta.id, comics: sortedUniqueComicsById(updatedRecord.comics) })
         }
-        await loadGlobalSnapshot(updatedMeta, true)
-        const websitePath = await writeSortedGlobalSnapshotCalibration(updatedMeta)
-        if (websitePath !== null) {
-          message.success(`已更新 ${target.label}快照，新增 ${addedComicIds.size} 本，已自動導出最終快照：${websitePath}`)
-        }
+        await finishGlobalSnapshotWebsiteExport(target, updatedMeta, {
+          addedCount: addedComicIds.size,
+          openTabOnComplete,
+        })
         return updatedMeta
       }
 
@@ -3351,14 +3393,22 @@ export default defineComponent({
         message.error(`${target.label}快照沒有可保存的資料`)
         return undefined
       }
-      await loadGlobalSnapshot(meta, true)
+      if (openTabOnComplete) {
+        await loadGlobalSnapshot(meta, true)
+      }
       if (isSnapshotScanComplete(meta) && !globalSnapshotCancelled) {
-        const websitePath = await writeSortedGlobalSnapshotCalibration(meta)
+        const websitePath = await exportGlobalSnapshotToWebsite(meta)
         if (websitePath !== null) {
-          message.success(`已自動導出最終快照：${websitePath}`)
+          message.success(
+            `${globalSnapshotLabel(meta)} 已導出至 Website Snapshot（舊檔已移至 old 資料夾）`,
+          )
         }
       }
-      message.success(`已保存 ${globalSnapshotLabel(meta)}`)
+      if (openTabOnComplete) {
+        message.success(`已保存 ${globalSnapshotLabel(meta)}`)
+      } else {
+        message.success(`已保存 ${globalSnapshotLabel(meta)}（未載入分頁，可於收藏快照手動開啟）`)
+      }
       return meta
     }
 
@@ -3368,9 +3418,99 @@ export default defineComponent({
         message.warning('沒有可接續掃描的快照')
         return
       }
-      globalSnapshotResumeSelectedId.value = candidates[0]?.id ?? null
+      globalSnapshotResumeSelectedIds.value = candidates.map((item) => item.id)
       globalSnapshotResumeStrategy.value = 'page'
       globalSnapshotResumeShowing.value = true
+    }
+
+    function toggleGlobalSnapshotResumeSelection(id: string, checked: boolean) {
+      if (checked) {
+        globalSnapshotResumeSelectedIds.value = [...new Set([...globalSnapshotResumeSelectedIds.value, id])]
+        return
+      }
+      globalSnapshotResumeSelectedIds.value = globalSnapshotResumeSelectedIds.value.filter((item) => item !== id)
+    }
+
+    function setGlobalSnapshotResumeSelectAll(checked: boolean) {
+      globalSnapshotResumeSelectedIds.value = checked ? globalSnapshotMetas.value.map((item) => item.id) : []
+    }
+
+    const globalSnapshotResumeAllSelected = computed(() => {
+      const total = globalSnapshotMetas.value.length
+      if (total === 0) {
+        return false
+      }
+      return globalSnapshotResumeSelectedIds.value.length === total
+    })
+
+    const globalSnapshotResumeSelectIndeterminate = computed(() => {
+      const selected = globalSnapshotResumeSelectedIds.value.length
+      const total = globalSnapshotMetas.value.length
+      return selected > 0 && selected < total
+    })
+
+    const globalSnapshotResumeHasIncompleteSelection = computed(() =>
+      globalSnapshotMetas.value.some(
+        (snapshot) =>
+          globalSnapshotResumeSelectedIds.value.includes(snapshot.id) && !isSnapshotScanComplete(snapshot),
+      ),
+    )
+
+    async function resumeGlobalSnapshotsInQueue() {
+      const snapshots = globalSnapshotResumeSelectedIds.value
+        .map((id) => globalSnapshotMetas.value.find((item) => item.id === id))
+        .filter((item): item is GlobalSnapshotMeta => item !== undefined)
+      if (snapshots.length === 0) {
+        message.warning('請至少選擇一個要接續的快照')
+        return undefined
+      }
+      if (!(await confirmGlobalSnapshotScan('resume'))) {
+        return undefined
+      }
+
+      const strategy = globalSnapshotResumeStrategy.value
+      let lastMeta: GlobalSnapshotMeta | undefined
+      let completedCount = 0
+
+      for (let index = 0; index < snapshots.length; index++) {
+        if (globalSnapshotCancelled) {
+          break
+        }
+        const snapshot = snapshots[index]
+        const target = snapshotScanTargetFromMeta(snapshot)
+        const mode = isSnapshotScanComplete(snapshot) || strategy === 'idUpdate' ? 'update' : 'resume'
+        const updateBaseMeta = mode === 'update' ? snapshot : undefined
+
+        if (snapshots.length > 1) {
+          message.info(`排隊接續掃描 ${index + 1}/${snapshots.length}：${globalSnapshotLabel(snapshot)}`)
+        }
+
+        try {
+          const meta = await scanGlobalSnapshotTarget(
+            target,
+            mode === 'update' ? undefined : snapshot,
+            updateBaseMeta,
+            { openTabOnComplete: false },
+          )
+          if (meta !== undefined) {
+            lastMeta = meta
+            completedCount += 1
+          }
+        } catch (err) {
+          console.error(err)
+          clearGlobalSnapshotProgress()
+          message.error(`${target.label}快照掃描發生錯誤，將繼續下一項`)
+        }
+      }
+
+      if (snapshots.length > 1) {
+        if (completedCount > 0) {
+          message.success(`排隊接續掃描完成 ${completedCount}/${snapshots.length} 項`)
+        } else if (!globalSnapshotCancelled) {
+          message.warning('排隊接續掃描未成功完成任何項目')
+        }
+      }
+      return lastMeta
     }
 
     function resolveGlobalSnapshotResume(confirmed: boolean) {
@@ -3378,16 +3518,13 @@ export default defineComponent({
         globalSnapshotResumeShowing.value = false
         return
       }
-      const snapshot = globalSnapshotMetas.value.find((item) => item.id === globalSnapshotResumeSelectedId.value)
-      if (snapshot === undefined) {
-        message.warning('請先選擇要接續的快照')
+      if (globalSnapshotResumeSelectedIds.value.length === 0) {
+        message.warning('請至少選擇一個要接續的快照')
         return
       }
       globalSnapshotResumeShowing.value = false
       store.currentTabName = 'search'
-      const mode =
-        isSnapshotScanComplete(snapshot) || globalSnapshotResumeStrategy.value === 'idUpdate' ? 'update' : 'resume'
-      void scanGlobalSnapshot(snapshot, mode)
+      void resumeGlobalSnapshotsInQueue()
     }
 
     function saveActiveScopedScanCache() {
@@ -5245,29 +5382,9 @@ export default defineComponent({
           return
         }
 
-        // 分批處理：每批 yield 一次，保持 UI 回應並更新進度
-        const BATCH = 10
-        const total = comicsSnapshot.length
-        const analysis = new Map<number, string>()
-        const validLines = result.data.filter(
-          (line) => line.trim() !== '' && !line.startsWith('#') && !line.startsWith('//'),
-        )
-        catalogAnalysisProgress.value = { current: 0, total }
-        await nextTick()
-
-        for (let i = 0; i < total; i += BATCH) {
-          const batch = comicsSnapshot.slice(i, i + BATCH)
-          const partial = analyzePageCatalogDuplicates(batch, validLines, {
-            tagLabel: tagLabelSnapshot,
-          })
-          for (const [k, v] of partial) {
-            analysis.set(k, v)
-          }
-          catalogAnalysisProgress.value = { current: Math.min(i + BATCH, total), total }
-          await new Promise<void>((r) => setTimeout(r, 0))
-        }
-
-        catalogAnalysisProgress.value = null
+        const analysis = analyzePageCatalogDuplicates(comicsSnapshot, result.data, {
+          tagLabel: tagLabelSnapshot,
+        })
         const duplicateCount = [...analysis.values()].filter((msg) => msg.startsWith('與列表中')).length
 
         if (tabId !== null && activeTabId.value !== tabId) {
@@ -6012,46 +6129,52 @@ export default defineComponent({
             showIcon={false}
             title="選擇接續掃描快照"
             style={{ width: '32rem', maxWidth: '92vw' }}
-            positiveText="接續掃描"
-            onPositiveClick={() => resolveGlobalSnapshotResume(true)}
+            positiveText={
+              globalSnapshotResumeSelectedIds.value.length > 0
+                ? `接續掃描（${globalSnapshotResumeSelectedIds.value.length} 項）`
+                : '接續掃描'
+            }
+            onPositiveClick={() => {
+              if (globalSnapshotResumeSelectedIds.value.length === 0) {
+                message.warning('請至少選擇一個要接續的快照')
+                return false
+              }
+              resolveGlobalSnapshotResume(true)
+            }}
             onClose={() => resolveGlobalSnapshotResume(false)}>
             <div class="flex flex-col gap-2 text-sm">
               <div class="opacity-75">
-                選擇分類快照後，完成度 100% 會走更新掃描；未滿 100% 會從目前完成度接續掃描到最新。
+                可複選多個分類快照，將依列表順序排隊接續掃描。完成度 100% 會走更新掃描；未滿 100% 會從目前完成度接續到最新。
               </div>
-              <NRadioGroup
-                value={globalSnapshotResumeSelectedId.value}
-                onUpdate:value={(value) => {
-                  globalSnapshotResumeSelectedId.value = String(value)
-                  globalSnapshotResumeStrategy.value = 'page'
-                }}>
-                <div class="max-h-72 overflow-auto flex flex-col gap-1">
-                  {globalSnapshotMetas.value.map((snapshot) => {
-                    const isComplete = isSnapshotScanComplete(snapshot)
-                    return (
-                      <NRadio key={snapshot.id} value={snapshot.id}>
-                        <div class="flex flex-col leading-snug">
-                          <span>
-                            {globalSnapshotLabel(snapshot)} · {isComplete ? '更新' : '接續'}
-                          </span>
-                          <span class="text-xs opacity-60">
-                            共{snapshot.totalCount}本 · 完成度 {scanCacheCompletionPercent(snapshot)}% · 已掃{' '}
-                            {snapshot.scanCompletedPages ?? 0}/{snapshot.totalPages} 頁
-                          </span>
-                        </div>
-                      </NRadio>
-                    )
-                  })}
-                </div>
-              </NRadioGroup>
-              {(() => {
-                const selectedSnapshot = globalSnapshotMetas.value.find(
-                  (snapshot) => snapshot.id === globalSnapshotResumeSelectedId.value,
-                )
-                if (selectedSnapshot === undefined || isSnapshotScanComplete(selectedSnapshot)) {
-                  return null
-                }
-                return (
+              <NCheckbox
+                checked={globalSnapshotResumeAllSelected.value}
+                indeterminate={globalSnapshotResumeSelectIndeterminate.value}
+                onUpdate:checked={(checked) => setGlobalSnapshotResumeSelectAll(checked)}>
+                全選
+              </NCheckbox>
+              <div class="max-h-72 overflow-auto flex flex-col gap-1 border border-[var(--n-border-color)] rounded px-2 py-1">
+                {globalSnapshotMetas.value.map((snapshot) => {
+                  const isComplete = isSnapshotScanComplete(snapshot)
+                  const checked = globalSnapshotResumeSelectedIds.value.includes(snapshot.id)
+                  return (
+                    <NCheckbox
+                      key={snapshot.id}
+                      checked={checked}
+                      onUpdate:checked={(value) => toggleGlobalSnapshotResumeSelection(snapshot.id, value)}>
+                      <div class="flex flex-col leading-snug">
+                        <span>
+                          {globalSnapshotLabel(snapshot)} · {isComplete ? '更新' : '接續'}
+                        </span>
+                        <span class="text-xs opacity-60">
+                          共{snapshot.totalCount}本 · 完成度 {scanCacheCompletionPercent(snapshot)}% · 已掃{' '}
+                          {snapshot.scanCompletedPages ?? 0}/{snapshot.totalPages} 頁
+                        </span>
+                      </div>
+                    </NCheckbox>
+                  )
+                })}
+              </div>
+              {globalSnapshotResumeHasIncompleteSelection.value ? (
                   <div class="flex flex-col gap-2 rounded border border-[var(--n-border-color)] px-3 py-2">
                     <span class="font-medium opacity-90">接續方式</span>
                     <NRadioGroup
@@ -6077,8 +6200,7 @@ export default defineComponent({
                       </div>
                     </NRadioGroup>
                   </div>
-                )
-              })()}
+              ) : null}
             </div>
           </NDialog>
         </NModal>
