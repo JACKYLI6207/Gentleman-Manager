@@ -74,7 +74,6 @@ function stripCatalogLinePrefix(line: string): string {
     .trim()
 }
 
-/** 去掉 (無碼版)、(有碼版) 等版本標記 */
 function stripEditionMarkers(text: string): string {
   return text
     .replace(/[(（\[]\s*无?(?:碼|码)版\s*[)）\]]/giu, '')
@@ -253,7 +252,6 @@ function seriesNameMatchesCatalogLineNames(seriesName: string, lineNames: string
         if (nf.length >= MIN_COMPARABLE_LEN && lf.includes(nf)) {
           return true
         }
-        // 標題含 (無碼版) 等尾綴時，目錄系列名可能是較短的子串
         if (lf.length >= 3 && nf.length > lf.length && nf.includes(lf)) {
           return true
         }
