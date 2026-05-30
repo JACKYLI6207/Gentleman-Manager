@@ -147,15 +147,40 @@ export const commands = {
   async createDownloadTask(comic: Comic, seriesParentDir?: string | null): Promise<void> {
     await TAURI_INVOKE('create_download_task', { comic, seriesParentDir: seriesParentDir ?? null })
   },
+  async listSimilarKoreanSeriesFolders(
+    seriesLabel: string,
+    episodeStart: number,
+    episodeEnd: number,
+  ): Promise<Result<string[], CommandError>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('list_similar_korean_series_folders', {
+          seriesLabel,
+          episodeStart,
+          episodeEnd,
+        }),
+      }
+    } catch (e) {
+      if (e instanceof Error) throw e
+      else return { status: 'error', error: e as any }
+    }
+  },
   async prepareKoreanSeriesFolder(
     seriesLabel: string,
     episodeStart: number,
     episodeEnd: number,
+    existingFolderName?: string | null,
   ): Promise<Result<string, CommandError>> {
     try {
       return {
         status: 'ok',
-        data: await TAURI_INVOKE('prepare_korean_series_folder', { seriesLabel, episodeStart, episodeEnd }),
+        data: await TAURI_INVOKE('prepare_korean_series_folder', {
+          seriesLabel,
+          episodeStart,
+          episodeEnd,
+          existingFolderName: existingFolderName ?? null,
+        }),
       }
     } catch (e) {
       if (e instanceof Error) throw e
@@ -481,6 +506,7 @@ export type Config = {
   apiDomainMode: ApiDomainMode
   customApiDomain: string
   downloadRetryCount: number
+  downloadFailureRestSec: number
   koreanTxtCatalogDir: string
   koreanTxtDuplicateCheckEnabled: boolean
 }

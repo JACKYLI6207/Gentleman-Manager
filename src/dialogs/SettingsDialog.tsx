@@ -194,6 +194,28 @@ export default defineComponent({
               <NInputGroupLabel size="small">次（共嘗試 N+1 次）</NInputGroupLabel>
             </NInputGroup>
 
+            <span class="font-bold mt-2">下載失敗休息</span>
+            <div class="text-xs opacity-70 mb-1">
+              任務進入「下載失敗」時，暫停下載佇列中所有任務；休息結束後自動繼續
+            </div>
+            <NInputGroup>
+              <NInputGroupLabel size="small">失敗後暫停佇列</NInputGroupLabel>
+              <NInputNumber
+                class="w-full"
+                size="small"
+                value={store.config?.downloadFailureRestSec}
+                onUpdate:value={(value) => {
+                  if (store.config && value !== null) {
+                    store.config.downloadFailureRestSec = value
+                  }
+                }}
+                min={0}
+                max={600}
+                parse={(x: string) => Number(x)}
+              />
+              <NInputGroupLabel size="small">秒（0 表示關閉）</NInputGroupLabel>
+            </NInputGroup>
+
             <span class="font-bold mt-2">下載速度</span>
             <div class="text-xs opacity-70 mb-1">
               同一時間僅一本漫畫實際下載；休息時間在該本完成後、下一本開始前生效

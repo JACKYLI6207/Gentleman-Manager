@@ -5,6 +5,7 @@ mod download_task_store;
 mod errors;
 mod events;
 mod extensions;
+mod korean_series_folder;
 mod korean_txt_catalog;
 mod local_reader;
 mod logger;
@@ -52,6 +53,7 @@ pub fn run() {
             download_shelf,
             create_download_task,
             read_korean_txt_catalog,
+            list_similar_korean_series_folders,
             prepare_korean_series_folder,
             pause_download_task,
             resume_download_task,

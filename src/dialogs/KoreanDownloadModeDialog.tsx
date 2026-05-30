@@ -11,6 +11,7 @@ import {
 } from 'naive-ui'
 import { useStore } from '../store.ts'
 import { commands, ComicInSearch } from '../bindings.ts'
+import { stripLeadingTitleMeta } from '../comicSearchName.ts'
 import {
   analyzeKoreanWebtoon,
   defaultCheckedIds,
@@ -65,6 +66,32 @@ export default defineComponent({
     const txtDuplicateLoading = ref(false)
     const txtDuplicateAnalysis = ref<KoreanTxtDuplicateAnalysis | null>(null)
     const txtDuplicateError = ref<string | null>(null)
+    const similarFolderDialogShowing = ref(false)
+    const similarFolderChoices = ref<string[]>([])
+    const similarFolderChoice = ref<'new' | string>('new')
+    let similarFolderResolver: ((value: 'cancel' | 'new' | string) => void) | null = null
+
+    const folderSeriesLabel = computed(() => {
+      const normalized =
+        normalizePageTagLabel(analysis.value.tagLabel) ?? analysis.value.tagLabel
+      return stripLeadingTitleMeta(normalized)
+    })
+
+    function askSimilarFolderChoice(candidates: string[]): Promise<'cancel' | 'new' | string> {
+      similarFolderChoices.value = candidates
+      similarFolderChoice.value = candidates[0] ?? 'new'
+      similarFolderDialogShowing.value = true
+      return new Promise((resolve) => {
+        similarFolderResolver = resolve
+      })
+    }
+
+    function resolveSimilarFolderChoice(value: 'cancel' | 'new' | string) {
+      similarFolderDialogShowing.value = false
+      similarFolderChoices.value = []
+      similarFolderResolver?.(value)
+      similarFolderResolver = null
+    }
 
     async function runTxtDuplicateAnalysis() {
       txtDuplicateAnalysis.value = null
@@ -155,10 +182,36 @@ export default defineComponent({
 
       submitting.value = true
 
-      const folderResult = await commands.prepareKoreanSeriesFolder(
-        analysis.value.tagLabel,
+      const seriesLabel = folderSeriesLabel.value
+      const similarResult = await commands.listSimilarKoreanSeriesFolders(
+        seriesLabel,
         analysis.value.rangeMin,
         analysis.value.rangeMax,
+      )
+      if (similarResult.status === 'error') {
+        submitting.value = false
+        message.error(similarResult.error.err_message)
+        console.error(similarResult.error)
+        return
+      }
+
+      let existingFolderName: string | null = null
+      if (similarResult.data.length > 0) {
+        const choice = await askSimilarFolderChoice(similarResult.data)
+        if (choice === 'cancel') {
+          submitting.value = false
+          return
+        }
+        if (choice !== 'new') {
+          existingFolderName = choice
+        }
+      }
+
+      const folderResult = await commands.prepareKoreanSeriesFolder(
+        seriesLabel,
+        analysis.value.rangeMin,
+        analysis.value.rangeMax,
+        existingFolderName,
       )
       if (folderResult.status === 'error') {
         submitting.value = false
@@ -233,6 +286,7 @@ export default defineComponent({
     }
 
     return () => (
+      <>
       <NModal show={props.showing} onUpdate:show={(v) => emit('update:showing', v)}>
         <NDialog
           showIcon={false}
@@ -312,9 +366,9 @@ export default defineComponent({
             </NRadioGroup>
 
             <div class="text-xs opacity-70">
-              將下載至新資料夾：
-              {analysis.value.tagLabel}-{analysis.value.rangeMin}~{analysis.value.rangeMax}-完
-              （若下載目錄已有其他資料夾，會自動加上「未分類序號」前綴）
+              將下載至資料夾：
+              {folderSeriesLabel.value}-{analysis.value.rangeMin}~{analysis.value.rangeMax}-完
+              （若下載目錄已有其他資料夾，會自動加上「未分類序號」前綴；已排除韓漫/漢化等前綴）
             </div>
 
             <div class="flex flex-col gap-2 overflow-auto max-h-64 border border-[var(--n-border-color)] rounded p-2">
@@ -351,6 +405,48 @@ export default defineComponent({
           </div>
         </NDialog>
       </NModal>
+      <NModal
+        show={similarFolderDialogShowing.value}
+        onUpdate:show={(v) => {
+          if (!v) {
+            resolveSimilarFolderChoice('cancel')
+          }
+        }}>
+        <NDialog
+          showIcon={false}
+          title="發現相似漫畫資料夾"
+          style={{ width: '32rem', maxWidth: '92vw' }}
+          positiveText="確認"
+          negativeText="取消"
+          onPositiveClick={() => {
+            resolveSimilarFolderChoice(
+              similarFolderChoice.value === 'new' ? 'new' : similarFolderChoice.value,
+            )
+            return true
+          }}
+          onNegativeClick={() => {
+            resolveSimilarFolderChoice('cancel')
+            return true
+          }}
+          onClose={() => resolveSimilarFolderChoice('cancel')}>
+          <div class="flex flex-col gap-3">
+            <div class="text-sm opacity-80">
+              下載目錄中已有名稱相似的資料夾，請選擇要新建資料夾，或使用現有資料夾繼續下載。
+            </div>
+            <NRadioGroup v-model:value={similarFolderChoice.value}>
+              <div class="flex flex-col gap-2">
+                <NRadio value="new">新建資料夾</NRadio>
+                {similarFolderChoices.value.map((name) => (
+                  <NRadio key={name} value={name}>
+                    使用現有：{name}
+                  </NRadio>
+                ))}
+              </div>
+            </NRadioGroup>
+          </div>
+        </NDialog>
+      </NModal>
+      </>
     )
   },
 })

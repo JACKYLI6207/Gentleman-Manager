@@ -4,7 +4,7 @@ use std::{
     ops::ControlFlow,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         Arc,
     },
     time::Duration,
@@ -28,6 +28,7 @@ use crate::{
     download_task_store::{DownloadTaskStore, PersistedDownloadTask},
     events::{DownloadSleepingEvent, DownloadSpeedEvent, DownloadTaskEvent, ZipDownloadServer},
     extensions::{AnyhowErrorToStringChain, AppHandleExt},
+    korean_series_folder,
     korean_txt_catalog,
     types::Comic,
     utils::filename_filter,
@@ -94,6 +95,8 @@ pub struct DownloadManager {
     img_sem: Arc<Semaphore>,
     byte_per_sec: Arc<AtomicU64>,
     download_tasks: Arc<RwLock<HashMap<i64, DownloadTask>>>,
+    failure_rest_generation: Arc<AtomicU64>,
+    failure_rest_timer_armed: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -122,6 +125,8 @@ impl DownloadManager {
             img_sem: Arc::new(Semaphore::new(img_concurrency)),
             byte_per_sec: Arc::new(AtomicU64::new(0)),
             download_tasks: Arc::new(RwLock::new(HashMap::new())),
+            failure_rest_generation: Arc::new(AtomicU64::new(0)),
+            failure_rest_timer_armed: Arc::new(AtomicBool::new(false)),
         };
 
         tauri::async_runtime::spawn(manager.clone().emit_download_speed_loop());
@@ -279,39 +284,61 @@ impl DownloadManager {
         }
     }
 
-    fn maybe_append_korean_series_to_catalog(&self, series_folder: &str) {
-        let config_holder = self.app.get_config();
-        let config = config_holder.read();
-        if !config.korean_txt_duplicate_check_enabled {
-            return;
+    fn maybe_cleanup_korean_series_on_cancel(&self, series_folder: &str) {
+        use DownloadTaskState::{Cancelled, Completed, Downloading, Failed, Paused, Pending};
+
+        for task in self.download_tasks.read().values() {
+            if task.series_parent_dir.as_deref() != Some(series_folder) {
+                continue;
+            }
+            let state = *task.state_sender.borrow();
+            if matches!(state, Pending | Downloading | Paused | Completed) {
+                return;
+            }
         }
-        let catalog_value = config.korean_txt_catalog_dir.to_string_lossy().to_string();
-        if catalog_value.trim().is_empty() {
-            return;
-        }
-        drop(config);
 
         let records = DownloadTaskStore::load(&self.app);
-        let series_tasks: Vec<_> = records
+        for record in records
             .iter()
             .filter(|r| r.series_parent_dir.as_deref() == Some(series_folder))
-            .collect();
-        if series_tasks.is_empty() {
-            return;
-        }
-        if !series_tasks
-            .iter()
-            .all(|r| r.state == DownloadTaskState::Completed)
         {
-            return;
+            if matches!(record.state, Pending | Downloading | Paused | Completed) {
+                return;
+            }
+            if !matches!(record.state, Cancelled | Failed) {
+                return;
+            }
         }
-        match korean_txt_catalog::append_folder_line_to_catalog(&catalog_value, series_folder) {
-            Ok(true) => tracing::info!(series_folder, "韓漫系列下載完成，已追加至 TXT 收藏列表"),
+
+        let config_holder = self.app.get_config();
+        let config = config_holder.read();
+        let catalog_enabled = config.korean_txt_duplicate_check_enabled;
+        let catalog_value = config.korean_txt_catalog_dir.to_string_lossy().to_string();
+        let download_dir = config.download_dir.clone();
+        drop(config);
+
+        if catalog_enabled && !catalog_value.trim().is_empty() {
+            match korean_txt_catalog::remove_folder_line_from_catalog(&catalog_value, series_folder)
+            {
+                Ok(true) => {
+                    tracing::info!(series_folder, "韓漫系列已取消，已從 TXT 收藏列表移除")
+                }
+                Ok(false) => {}
+                Err(err) => tracing::warn!(
+                    series_folder,
+                    message = %err,
+                    "從韓漫 TXT 收藏列表移除失敗"
+                ),
+            }
+        }
+
+        match korean_series_folder::try_remove_empty_series_folder(&download_dir, series_folder) {
+            Ok(true) => tracing::info!(series_folder, "韓漫系列已取消，已刪除空資料夾"),
             Ok(false) => {}
             Err(err) => tracing::warn!(
                 series_folder,
                 message = %err,
-                "追加韓漫 TXT 收藏列表失敗"
+                "刪除韓漫系列空資料夾失敗"
             ),
         }
     }
@@ -397,6 +424,104 @@ impl DownloadManager {
         task.set_state(DownloadTaskState::Cancelled);
         task.emit_download_task_event();
         Ok(())
+    }
+
+    fn pause_all_queue_tasks(&self) {
+        use DownloadTaskState::{Downloading, Pending};
+
+        for task in self.download_tasks.read().values() {
+            let state = *task.state_sender.borrow();
+            if matches!(state, Pending | Downloading) {
+                task.set_state(DownloadTaskState::Paused);
+                task.emit_download_task_event();
+            }
+        }
+
+        for mut record in DownloadTaskStore::load(&self.app) {
+            if !matches!(record.state, Pending | Downloading) {
+                continue;
+            }
+            if self.download_tasks.read().contains_key(&record.comic_id) {
+                continue;
+            }
+            record.state = DownloadTaskState::Paused;
+            DownloadTaskStore::upsert(&self.app, record);
+        }
+    }
+
+    fn resume_all_queue_tasks(&self) {
+        let comic_ids: Vec<i64> = self
+            .download_tasks
+            .read()
+            .iter()
+            .filter(|(_, task)| *task.state_sender.borrow() == DownloadTaskState::Paused)
+            .map(|(comic_id, _)| *comic_id)
+            .collect();
+        for comic_id in comic_ids {
+            if let Err(err) = self.resume_download_task(comic_id) {
+                tracing::warn!(comic_id, message = %err, "下載失敗休息結束後恢復任務失敗");
+            }
+        }
+
+        for record in DownloadTaskStore::load(&self.app) {
+            if record.state != DownloadTaskState::Paused {
+                continue;
+            }
+            if self.download_tasks.read().contains_key(&record.comic_id) {
+                continue;
+            }
+            if let Err(err) = self.resume_download_task(record.comic_id) {
+                tracing::warn!(
+                    comic_id = record.comic_id,
+                    message = %err,
+                    "下載失敗休息結束後恢復任務失敗"
+                );
+            }
+        }
+    }
+
+    fn cancel_failure_rest_on_queue_download(&self) {
+        if !self.failure_rest_timer_armed.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        self.failure_rest_generation
+            .fetch_add(1, Ordering::SeqCst);
+        tracing::info!("下載失敗休息計時已取消（佇列已開始下載）");
+    }
+
+    fn maybe_trigger_failure_rest(&self) {
+        let rest_sec = {
+            let config_holder = self.app.get_config();
+            let config = config_holder.read();
+            config.download_failure_rest_sec
+        };
+        if rest_sec == 0 {
+            return;
+        }
+
+        self.pause_all_queue_tasks();
+        self.failure_rest_timer_armed.store(true, Ordering::SeqCst);
+        let generation = self
+            .failure_rest_generation
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        tracing::info!(rest_sec, "下載失敗休息：已暫停佇列");
+
+        let manager = self.clone();
+        tauri::async_runtime::spawn(async move {
+            sleep(Duration::from_secs(rest_sec)).await;
+            if manager.failure_rest_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if !manager
+                .failure_rest_timer_armed
+                .swap(false, Ordering::SeqCst)
+            {
+                return;
+            }
+            manager.resume_all_queue_tasks();
+            tracing::info!(rest_sec, "下載失敗休息結束：已恢復佇列");
+        });
     }
 
     pub fn remove_download_task_record(&self, comic_id: i64) -> anyhow::Result<()> {
@@ -1149,11 +1274,18 @@ impl DownloadTask {
         };
         let _ = event.emit(&self.app);
         DownloadTaskStore::upsert_event(&self.app, &event);
-        if event.state == DownloadTaskState::Completed {
+        if event.state == DownloadTaskState::Cancelled {
             if let Some(ref series_folder) = event.series_parent_dir {
                 self.download_manager
-                    .maybe_append_korean_series_to_catalog(series_folder);
+                    .maybe_cleanup_korean_series_on_cancel(series_folder);
             }
+        }
+        if event.state == DownloadTaskState::Failed {
+            self.download_manager.maybe_trigger_failure_rest();
+        }
+        if event.state == DownloadTaskState::Downloading {
+            self.download_manager
+                .cancel_failure_rest_on_queue_download();
         }
     }
 

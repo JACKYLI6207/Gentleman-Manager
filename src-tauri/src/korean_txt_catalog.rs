@@ -167,6 +167,45 @@ pub fn append_folder_line_to_catalog(
     Ok(true)
 }
 
+/// 從 TXT 列表移除指定資料夾名稱行（精確比對 trim 後內容）。
+pub fn remove_folder_line_from_catalog(
+    config_value: &str,
+    folder_line: &str,
+) -> anyhow::Result<bool> {
+    let trimmed = folder_line.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+    let target = resolve_append_target_file(config_value)?;
+    let existing_raw = std::fs::read_to_string(&target).unwrap_or_default();
+    if existing_raw.is_empty() {
+        return Ok(false);
+    }
+    let mut removed = false;
+    let mut kept_lines: Vec<&str> = Vec::new();
+    for line in existing_raw.lines() {
+        if line.trim() == trimmed {
+            removed = true;
+        } else {
+            kept_lines.push(line);
+        }
+    }
+    if !removed {
+        return Ok(false);
+    }
+    while kept_lines.last().is_some_and(|line| line.trim().is_empty()) {
+        kept_lines.pop();
+    }
+    let mut new_content = kept_lines.join("\n");
+    if !new_content.is_empty() {
+        new_content.push('\n');
+    }
+    std::fs::write(&target, new_content)
+        .with_context(|| format!("無法寫入 TXT 檔 `{}`", target.display()))?;
+    tracing::info!(path = %target.display(), line = trimmed, "已從韓漫收藏列表移除");
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

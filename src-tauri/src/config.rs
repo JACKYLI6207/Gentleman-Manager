@@ -29,6 +29,8 @@ pub struct Config {
     pub custom_api_domain: String,
     /// 單次下載請求失敗後，最多再嘗試的次數（總嘗試次數 = 1 + 此值）
     pub download_retry_count: u32,
+    /// 任務進入「下載失敗」時，暫停佇列並休息的秒數（0 表示關閉）
+    pub download_failure_rest_sec: u64,
     /// 韓漫 TXT 收藏列表目錄（用於重複檢查）
     pub korean_txt_catalog_dir: PathBuf,
     /// 開啟韓漫下載模式時是否自動比對 TXT 目錄
@@ -121,6 +123,7 @@ impl Config {
             api_domain_mode: ApiDomainMode::Default,
             custom_api_domain: DEFAULT_API_DOMAIN.to_string(),
             download_retry_count: 1,
+            download_failure_rest_sec: 0,
             korean_txt_catalog_dir: PathBuf::new(),
             korean_txt_duplicate_check_enabled: true,
         }
