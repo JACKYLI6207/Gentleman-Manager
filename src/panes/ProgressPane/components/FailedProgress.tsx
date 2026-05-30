@@ -64,6 +64,7 @@ export default defineComponent({
           class={[
             isChild ? styles.seriesChildRow : styles.row,
             'flex items-center gap-2 p-2.5 rounded-lg',
+            isChild ? '' : 'mb-1.5',
             checkedIds.value.has(comicId) ? 'selected' : '',
           ]}>
           {!isChild && (
@@ -93,7 +94,7 @@ export default defineComponent({
     }
 
     return () => (
-      <div class="h-full min-h-0 flex flex-col gap-2">
+      <div class="h-full min-h-0 flex flex-col gap-2 box-border">
         <DownloadTaskToolbar
           allChecked={allChecked.value}
           onSelectAllChange={setSelectAll}
@@ -102,7 +103,7 @@ export default defineComponent({
           onCancel={cancelChecked}
         />
 
-        <div ref={listEl} class={`${styles.listContainer} flex flex-col gap-1.5 p-2`}>
+        <div ref={listEl} class={`${styles.listContainer} select-none p-2`}>
           {grouped.value.seriesGroups.map((group) => (
             <DownloadSeriesGroupBlock
               key={group.seriesParentDir}
