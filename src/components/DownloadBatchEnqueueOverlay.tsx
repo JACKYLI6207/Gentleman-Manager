@@ -85,13 +85,7 @@ export default defineComponent({
       if (batchEnqueueUi.failures.value.length > 0) {
         return
       }
-      const { enqueued, total, abandonedCount, seriesFolderLabel } = batchEnqueueUi
-      const folderPart =
-        seriesFolderLabel.value !== undefined ? `，目錄：${seriesFolderLabel.value}` : ''
-      const abandonPart =
-        abandonedCount.value > 0 ? `（${abandonedCount.value} 本已取消加入）` : ''
-      batchEnqueueUi.doneSummary.value = `已加入下載佇列 ${enqueued.value} / ${total.value} 本${abandonPart}${folderPart}`
-      batchEnqueueUi.phase.value = 'done'
+      dismissDownloadBatchEnqueueOverlay()
     }
 
     async function retrySelectedFailures() {

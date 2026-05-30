@@ -70,10 +70,14 @@ export function showBatchEnqueueFailures(
   batchEnqueueUi.retrying.value = false
 }
 
-export function showBatchEnqueueDone(summary: string): void {
-  batchEnqueueUi.phase.value = 'done'
+export function showBatchEnqueueDone(summary: string, options?: { requireDismiss?: boolean }): void {
   batchEnqueueUi.doneSummary.value = summary
   batchEnqueueUi.retrying.value = false
+  if (options?.requireDismiss) {
+    batchEnqueueUi.phase.value = 'done'
+    return
+  }
+  dismissDownloadBatchEnqueueOverlay()
 }
 
 export function dismissDownloadBatchEnqueueOverlay(): void {

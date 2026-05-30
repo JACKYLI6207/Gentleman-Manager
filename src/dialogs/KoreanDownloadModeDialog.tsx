@@ -227,7 +227,7 @@ export default defineComponent({
           )
         } catch (err) {
           console.error(err)
-          showBatchEnqueueDone('加入下載佇列時發生錯誤，請關閉後重試')
+          showBatchEnqueueDone('加入下載佇列時發生錯誤，請關閉後重試', { requireDismiss: true })
         }
       })
     }
