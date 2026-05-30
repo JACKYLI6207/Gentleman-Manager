@@ -69,6 +69,16 @@ export type SearchSortOrder = 'createDateAsc' | 'createDateDesc' | 'titleAsc' | 
 export const DEFAULT_SEARCH_SORT_ORDER: SearchSortOrder = 'comicIdDesc'
 const SEARCH_SORT_ORDER_STORAGE_KEY = 'searchSortOrder'
 
+/** 官網即時列表分頁軸（與 HTML 列表順序一致，約 ID 降序） */
+export const WEBSITE_BROWSE_SORT_ORDER: SearchSortOrder = 'comicIdDesc'
+
+export const LIVE_BROWSE_CUSTOM_SORT_HINT =
+  '目前排序僅重排本頁，與官網分頁不一致；對照官網請選「ID編號降序」'
+
+export function isIdBasedSortOrder(order: SearchSortOrder): boolean {
+  return order === 'comicIdDesc' || order === 'comicIdAsc'
+}
+
 /** 搜尋結果卡片只顯示「N張照片/圖片」，不含創建時間等後綴 */
 export function formatSearchPhotoInfo(additionalInfo: string): string {
   const match = additionalInfo.match(/\d+\s*張(?:照片|圖片)/)
@@ -125,8 +135,6 @@ export const SEARCH_SORT_OPTIONS: { label: string; key: SearchSortOrder }[] = [
   { label: 'ID編號升序', key: 'comicIdAsc' },
   { label: '創建日期降序', key: 'createDateDesc' },
   { label: '創建日期升序', key: 'createDateAsc' },
-  { label: '漫畫名稱降序', key: 'titleDesc' },
-  { label: '漫畫名稱升序', key: 'titleAsc' },
 ]
 
 export function isSearchSortOrder(value: string): value is SearchSortOrder {

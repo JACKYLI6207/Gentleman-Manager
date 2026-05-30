@@ -82,7 +82,7 @@ Windows 快速建置 EXE：
 pnpm tauri:build:fast
 ```
 
-建置產物位於 `src-tauri\target\release-fast\Gentleman-Manager.exe`。若要發佈到 GitHub Releases，請自行複製並打包為 `Gentleman-Manager-v1.2.exe` / `.zip`（此類產物不納入 Git）。
+建置產物位於 `src-tauri\target\release-fast\Gentleman-Manager.exe`。若要發佈到 GitHub Releases，根目錄 `rebuild-exe.ps1` 會產出 `Gentleman-Manager-v1.2.1.exe` / `.zip`（此類產物不納入 Git）。
 
 ## 倉庫內容說明
 

@@ -241,7 +241,13 @@ export default defineComponent({
                   <SearchPane ref={searchPane} />
                 </NTabPane>
                 <NTabPane class="h-full overflow-auto p-0!" name="comic" tab="漫畫詳情" display-directive="show">
-                  {searchPane.value && <ComicPane searchByTag={searchPane.value.searchByTag} />}
+                  {searchPane.value && (
+                    <ComicPane
+                      searchByTag={searchPane.value.searchByTag}
+                      searchFromComicDetail={searchPane.value.searchFromComicDetail}
+                      hasComicCategorySnapshot={searchPane.value.hasComicCategorySnapshot}
+                    />
+                  )}
                 </NTabPane>
                 <NTabPane class="h-full overflow-auto p-0!" name="read" display-directive="show">
                   {{

@@ -23,7 +23,9 @@ import { PhListBullets, PhMagnifyingGlass, PhTrash } from '@phosphor-icons/vue'
 import FloatLabelInput from '../components/FloatLabelInput.tsx'
 import {
   extractComicId,
+  isIdBasedSortOrder,
   loadSavedSearchSortOrder,
+  LIVE_BROWSE_CUSTOM_SORT_HINT,
   parseTagSearchLink,
   SEARCH_SORT_OPTIONS,
   saveSearchSortOrder,
@@ -68,6 +70,7 @@ import {
 } from '../categories.ts'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { chineseSearchVariants } from '../chineseText.ts'
+import { extractComicSearchName } from '../comicSearchName.ts'
 
 /** 官網列表每頁 20 本；UI 分頁依「每頁顯示」按需抓取官網頁 */
 const SERVER_PAGE_SIZE = 20
@@ -1116,6 +1119,10 @@ export default defineComponent({
       () => SEARCH_SORT_OPTIONS.find((o) => o.key === sortOrder.value)?.label ?? '排列方式',
     )
 
+    const showBrowseSortHint = computed(
+      () => isLiveWebsiteBrowse() && !isIdBasedSortOrder(sortOrder.value),
+    )
+
     const pageSizeButtonLabel = computed(() => `每頁 ${pageSize.value}`)
     const activeSearchInputValue = computed(() => keywordOrComicLinkInput.value)
     const activeSearchInputLoading = computed(() => searchingKeywordOrComicLink.value)
@@ -1682,6 +1689,14 @@ export default defineComponent({
       return scopedOfflineMatches.value.length > 0
     }
 
+    function isLiveWebsiteBrowse() {
+      return (
+        !hasScopedOfflineMatches() &&
+        !isGlobalSnapshotSearchState(searchSource.value, activeCategoryLabel.value) &&
+        totalCountHint.value > 0
+      )
+    }
+
     function getSortedScopedOfflineMatches(): ComicInSearch[] {
       return sortSearchComics(scopedOfflineMatches.value, sortOrder.value)
     }
@@ -1945,9 +1960,18 @@ export default defineComponent({
       const merged: ComicInSearch[] = []
       for (let p = firstServerPage; p <= lastServerPage; p++) {
         const cached = pageCache.get(p)
-        if (cached !== undefined) {
-          merged.push(...cached.comics)
+        if (cached === undefined) {
+          continue
         }
+        let pageComics = cached.comics
+        if (
+          merged.length > 0 &&
+          pageComics.length > 0 &&
+          merged[merged.length - 1]!.id === pageComics[0]!.id
+        ) {
+          pageComics = pageComics.slice(1)
+        }
+        merged.push(...pageComics)
       }
       return merged
     }
@@ -2075,45 +2099,70 @@ export default defineComponent({
       }
 
       const firstServerPage = Math.floor(startIdx / SERVER_PAGE_SIZE) + 1
-      const lastServerPage = Math.floor((endIdx - 1) / SERVER_PAGE_SIZE) + 1
-
-      viewPageFetchProgress.value = { current: 0, total: Math.max(1, lastServerPage - firstServerPage + 1) }
-
-      const loadResult = await ensureServerPagesLoaded(firstServerPage, lastServerPage, session, (current, total) => {
-        viewPageFetchProgress.value = { current, total }
-      })
-
-      viewPageFetchProgress.value = null
-
-      if (loadResult === 'superseded') {
-        viewPage.value = previousCommittedPage
-        return false
-      }
-      if (loadResult === 'error') {
-        viewPage.value = previousCommittedPage
-        message.error('無法載入這一頁，請稍後再試')
-        return false
-      }
-      if (!isActiveSearchSession(session)) {
-        viewPage.value = previousCommittedPage
-        return false
-      }
-
-      const merged = mergeServerPageComics(firstServerPage, lastServerPage)
+      const lastServerPageInitial = Math.floor((endIdx - 1) / SERVER_PAGE_SIZE) + 1
+      let spEnd = lastServerPageInitial + 1
       const offsetInMerged = startIdx - (firstServerPage - 1) * SERVER_PAGE_SIZE
       const wantedCount = endIdx - startIdx
-      allSearchComics.value = merged.slice(offsetInMerged, offsetInMerged + wantedCount)
+      let resolvedSlice: ComicInSearch[] = []
+
+      while (true) {
+        const safeEnd = totalCountHint.value > 0 ? Math.min(spEnd, maxServerListPage()) : spEnd
+
+        viewPageFetchProgress.value = {
+          current: 0,
+          total: Math.max(1, safeEnd - firstServerPage + 1),
+        }
+
+        const loadResult = await ensureServerPagesLoaded(firstServerPage, safeEnd, session, (current, total) => {
+          viewPageFetchProgress.value = { current, total }
+        })
+
+        viewPageFetchProgress.value = null
+
+        if (loadResult === 'superseded') {
+          viewPage.value = previousCommittedPage
+          return false
+        }
+        if (loadResult === 'error') {
+          viewPage.value = previousCommittedPage
+          message.error('無法載入這一頁，請稍後再試')
+          return false
+        }
+        if (!isActiveSearchSession(session)) {
+          viewPage.value = previousCommittedPage
+          return false
+        }
+
+        const merged = mergeServerPageComics(firstServerPage, safeEnd)
+        const slice = merged.slice(offsetInMerged, offsetInMerged + wantedCount)
+
+        if (slice.length >= wantedCount) {
+          resolvedSlice = slice
+          break
+        }
+
+        if (totalCountHint.value > 0 && spEnd >= maxServerListPage()) {
+          resolvedSlice = slice
+          break
+        }
+
+        spEnd += 1
+        if (totalCountHint.value <= 0 && spEnd > firstServerPage + 20) {
+          resolvedSlice = slice
+          break
+        }
+      }
+
+      allSearchComics.value = resolvedSlice
 
       if (!hasScopedOfflineMatches() && !isScopedSearchActive.value) {
         const firstCached = pageCache.get(firstServerPage)
         if (
           allSearchComics.value.length < wantedCount &&
           firstServerPage > 1 &&
-          (merged.length === 0 || firstCached?.comics.length === 0)
+          (resolvedSlice.length === 0 || firstCached?.comics.length === 0)
         ) {
           await discoverSearchTailTotal(firstServerPage, session)
-        } else if (allSearchComics.value.length < wantedCount) {
-          refineTotalCountHint(startIdx + allSearchComics.value.length)
         }
       }
 
@@ -5443,6 +5492,175 @@ export default defineComponent({
       return runExclusiveSearch(() => searchByKeywordImpl(keyword))
     }
 
+    function resolveCategoryScopeFromComicCategory(category: string) {
+      const normalized = category.trim()
+      if (normalized === '') {
+        return null
+      }
+      const exact = CATEGORY_SEARCH_SCOPE_OPTIONS.find((option) => option.label === normalized)
+      if (exact !== undefined) {
+        return exact
+      }
+      return (
+        CATEGORY_SEARCH_SCOPE_OPTIONS.find(
+          (option) => normalized.includes(option.label) || option.label.includes(normalized),
+        ) ?? null
+      )
+    }
+
+    function hasComicCategorySnapshot(category: string) {
+      const scope = resolveCategoryScopeFromComicCategory(category)
+      if (scope === null) {
+        return false
+      }
+      return findLatestGlobalSnapshotForScope(scope) !== undefined
+    }
+
+    async function searchByKeywordInScopeDirect(keyword: string, scope: { cateId: number; label: string }) {
+      clearScopedSearchProgress()
+      void commands.cancelScopedSearchScan()
+      const tabTitle = formatSearchResultTabTitle({
+        searchSource: { type: 'keyword', cateId: scope.cateId },
+        keywordOrComicLinkInput: keyword,
+        tagOrLinkInput: tagOrLinkInput.value,
+        activeTagSearchSource: activeTagSearchSource.value,
+        activeTagLabel: '',
+        activeCategoryLabel: scope.label,
+        searchScopeCategory: scope,
+        rankingPeriod: rankingPeriod.value,
+      })
+      persistActiveTabBeforeNewSearch()
+      keywordOrComicLinkInput.value = keyword
+      searchInputMode.value = 'keywordOrComicLink'
+      searchSource.value = { type: 'keyword', cateId: scope.cateId }
+      searchScopeCategory.value = scope
+      activeTagLabel.value = ''
+      activeCategoryLabel.value = scope.label
+      store.activeBrowseLabel = scope.label
+      searchingKeywordOrComicLink.value = true
+      const session = beginSearchSession()
+
+      const result = await commands.searchByKeyword(keyword, 1, scope.cateId, scopedSearchScanModeParam.value)
+      if (!isActiveSearchSession(session)) {
+        searchingKeywordOrComicLink.value = false
+        return
+      }
+      if (result.status === 'error') {
+        searchingKeywordOrComicLink.value = false
+        clearScopedSearchProgress()
+        if (isSearchCancelledError(result.error)) {
+          message.info('已取消掃描')
+        } else {
+          message.error('搜尋失敗，請稍後再試')
+        }
+        console.error(result.error)
+        return
+      }
+
+      store.currentTabName = 'search'
+      if (result.data.comics.length === 0) {
+        message.warning(`沒有搜尋到「${keyword}」`)
+      }
+
+      try {
+        await completeNewSearchTab(tabTitle, result.data)
+      } finally {
+        searchingKeywordOrComicLink.value = false
+        if (isActiveSearchSession(session)) {
+          clearScopedSearchProgress()
+        }
+      }
+    }
+
+    function filterCategorySnapshotByKeyword(comics: ComicInSearch[], keyword: string) {
+      const keywordVariants = chineseSearchVariants(keyword)
+      if (keywordVariants.length === 0) {
+        return []
+      }
+      return comics.filter((comic) => comicTitleMatchesKeywordVariants(comic, keywordVariants))
+    }
+
+    async function searchCategorySnapshotByKeywordImpl(
+      keyword: string,
+      scope: { cateId: number; label: string },
+    ) {
+      const snapshot = findLatestGlobalSnapshotForScope(scope)
+      if (snapshot === undefined) {
+        message.warning(`沒有「${scope.label}」的分類快照`)
+        return
+      }
+      searchingKeywordOrComicLink.value = true
+      const record = await getGlobalSnapshotRecord(snapshot.id)
+      if (record === undefined) {
+        searchingKeywordOrComicLink.value = false
+        message.warning('找不到分類快照內容')
+        return
+      }
+      try {
+        const matches = filterCategorySnapshotByKeyword(record.comics, keyword)
+        persistActiveTabBeforeNewSearch()
+        keywordOrComicLinkInput.value = keyword
+        tagOrLinkInput.value = ''
+        searchInputMode.value = 'keywordOrComicLink'
+        searchSource.value = { type: 'keyword', cateId: scope.cateId }
+        searchScopeCategory.value = scope
+        activeTagLabel.value = ''
+        activeCategoryLabel.value = `${scope.label} · 快照`
+        store.activeBrowseLabel = scope.label
+        store.currentTabName = 'search'
+        const session = beginSearchSession()
+        await completeNewSearchTab(`${scope.label} · ${keyword} · 快照`, buildCollectedSearchResult(matches), {
+          offlineComics: matches,
+        })
+        if (!isActiveSearchSession(session)) {
+          return
+        }
+        if (matches.length === 0) {
+          message.warning(`快照內沒有搜尋到「${keyword}」`)
+        } else {
+          message.success(`已使用 ${globalSnapshotLabel(snapshot)} 搜尋，找到 ${matches.length} 本`)
+        }
+      } finally {
+        searchingKeywordOrComicLink.value = false
+      }
+    }
+
+    async function searchFromComicDetailImpl(
+      title: string,
+      category: string,
+      mode: 'global' | 'category' | 'snapshot',
+    ) {
+      const keyword = extractComicSearchName(title)
+      if (keyword === '') {
+        message.warning('無法從標題提取漫畫名')
+        return
+      }
+      store.currentTabName = 'search'
+      if (mode === 'global') {
+        searchScopeCategory.value = null
+        await searchByKeywordImpl(keyword)
+        return
+      }
+      const scope = resolveCategoryScopeFromComicCategory(category)
+      if (scope === null) {
+        message.warning(`無法識別分類「${category}」`)
+        return
+      }
+      if (mode === 'category') {
+        await searchByKeywordInScopeDirect(keyword, scope)
+        return
+      }
+      await searchCategorySnapshotByKeywordImpl(keyword, scope)
+    }
+
+    function searchFromComicDetail(
+      title: string,
+      category: string,
+      mode: 'global' | 'category' | 'snapshot',
+    ) {
+      return runExclusiveSearch(() => searchFromComicDetailImpl(title, category, mode))
+    }
+
     async function searchByTagImpl(tagName: string, pageNum: number, useCategoryScope: boolean) {
       if (!useCategoryScope) {
         clearScopedSearchProgress()
@@ -6306,6 +6524,11 @@ export default defineComponent({
                 ))}
               </div>
             </div>
+            {showBrowseSortHint.value && (
+              <div class="px-2 py-1 text-xs text-[var(--n-warning-color)] border-t border-[var(--n-divider-color)]">
+                {LIVE_BROWSE_CUSTOM_SORT_HINT}
+              </div>
+            )}
             <div class="flex items-center gap-2 p-2 mt-auto box-border flex-wrap w-full">
               <div class="flex items-center gap-1 shrink-0">
                 <NPagination
@@ -7046,6 +7269,8 @@ export default defineComponent({
       render,
       searchByTag,
       searchByCategory,
+      hasComicCategorySnapshot,
+      searchFromComicDetail,
       browseSiteList,
       browseRanking,
       activeCategoryLabel,

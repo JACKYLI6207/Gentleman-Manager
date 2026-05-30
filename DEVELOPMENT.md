@@ -29,7 +29,7 @@ pnpm tauri dev
 pnpm tauri:build:fast
 ```
 
-產物位於 `src-tauri\target\release-fast\Gentleman-Manager.exe`。根目錄的 `Gentleman-Manager-v1.2.exe` / `.zip` 為本機發佈用產物，不納入 Git。
+產物位於 `src-tauri\target\release-fast\Gentleman-Manager.exe`。根目錄的 `Gentleman-Manager-v1.2.1.exe` / `.zip` 為本機發佈用產物，不納入 Git。
 
 ## 倉庫體積說明
 

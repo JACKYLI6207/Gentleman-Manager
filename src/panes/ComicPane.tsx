@@ -2,15 +2,28 @@ import { computed, defineComponent, onMounted, PropType, watch } from 'vue'
 import { useStore } from '../store.ts'
 import { commands, events } from '../bindings.ts'
 import { path } from '@tauri-apps/api'
-import { NEmpty, NButton } from 'naive-ui'
+import { NEmpty, NButton, NDropdown } from 'naive-ui'
 import DownloadButton from '../components/DownloadButton.tsx'
 import cardStyles from '../components/ComicCard.module.css'
+import { extractComicSearchName } from '../comicSearchName.ts'
+
+export type ComicDetailSearchMode = 'global' | 'category' | 'snapshot'
 
 export default defineComponent({
   name: 'ComicPane',
   props: {
     searchByTag: {
       type: Function as PropType<(tagName: string, page: number) => Promise<void>>,
+      required: true,
+    },
+    searchFromComicDetail: {
+      type: Function as PropType<
+        (title: string, category: string, mode: ComicDetailSearchMode) => Promise<void>
+      >,
+      required: true,
+    },
+    hasComicCategorySnapshot: {
+      type: Function as PropType<(category: string) => boolean>,
       required: true,
     },
   },
@@ -21,6 +34,24 @@ export default defineComponent({
     const cover = computed<string | undefined>(() =>
       store.pickedComic ? store.covers.get(store.pickedComic.id) : undefined,
     )
+
+    const searchKeywordPreview = computed(() =>
+      store.pickedComic ? extractComicSearchName(store.pickedComic.title) : '',
+    )
+
+    const snapshotSearchAvailable = computed(() =>
+      store.pickedComic ? props.hasComicCategorySnapshot(store.pickedComic.category) : false,
+    )
+
+    const comicSearchOptions = computed(() => [
+      { label: '全站搜索', key: 'global' },
+      { label: '分類搜索', key: 'category' },
+      {
+        label: '快照搜索',
+        key: 'snapshot',
+        disabled: !snapshotSearchAvailable.value,
+      },
+    ])
 
     watch(
       () => store.pickedComic,
@@ -58,6 +89,17 @@ export default defineComponent({
       }
     }
 
+    function onComicSearchSelect(key: string | number) {
+      if (store.pickedComic === undefined) {
+        return
+      }
+      const mode = String(key) as ComicDetailSearchMode
+      if (mode === 'snapshot' && !snapshotSearchAvailable.value) {
+        return
+      }
+      void props.searchFromComicDetail(store.pickedComic.title, store.pickedComic.category, mode)
+    }
+
     return () => {
       if (store.pickedComic === undefined) {
         return <NEmpty class="pt-2" description="請先選擇漫畫(漫畫搜尋)" />
@@ -92,6 +134,23 @@ export default defineComponent({
                   comicDownloaded={store.pickedComic.isDownloaded === true}
                   idleLabel="下載"
                 />
+                <NDropdown
+                  trigger="click"
+                  placement="bottom"
+                  options={comicSearchOptions.value}
+                  onSelect={onComicSearchSelect}>
+                  <NButton
+                    size="small"
+                    type="primary"
+                    class={cardStyles.detailButton}
+                    title={
+                      searchKeywordPreview.value !== ''
+                        ? `以「${searchKeywordPreview.value}」搜索`
+                        : '搜索'
+                    }>
+                    搜索
+                  </NButton>
+                </NDropdown>
               </div>
             </div>
           </div>
